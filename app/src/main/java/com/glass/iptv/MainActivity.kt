@@ -16,6 +16,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -37,7 +38,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.Color
@@ -146,8 +150,17 @@ class MainActivity : ComponentActivity() {
 }
 
 // فرش الزجاج مشتركة بين كل العناصر عشان ما تنعاد صياغتها مع كل تمرير
-private val GlassFill = Brush.linearGradient(listOf(Color.White.copy(0.17f), Color.White.copy(0.05f)))
-private val GlassStroke = Brush.linearGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.06f), Color.White.copy(0.25f)))
+private val GlassFill = Brush.linearGradient(listOf(Color.White.copy(0.20f), Color.White.copy(0.06f)))
+private val GlassStroke = Brush.linearGradient(listOf(Color.White.copy(0.75f), Color.White.copy(0.08f), Color.White.copy(0.45f)))
+
+// زجاج مضبب حقيقي: تمويه قوي مع رفع التشبع زي زجاج iOS (يشتغل من أندرويد 12)
+@androidx.annotation.RequiresApi(31)
+fun frostEffect(radius: Float): androidx.compose.ui.graphics.RenderEffect {
+    val cm = android.graphics.ColorMatrix().apply { setSaturation(1.7f) }
+    val sat = android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(cm))
+    val blur = android.graphics.RenderEffect.createBlurEffect(radius, radius, android.graphics.Shader.TileMode.CLAMP)
+    return android.graphics.RenderEffect.createChainEffect(sat, blur).asComposeRenderEffect()
+}
 
 fun Modifier.glass(r: Dp = 24.dp, clipContent: Boolean = true): Modifier {
     val shape = RoundedCornerShape(r)
@@ -175,6 +188,7 @@ val IStarOff = mkIcon("M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 2
 val IFull = mkIcon("M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z")
 val IFullExit = mkIcon("M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z")
 val IPip = mkIcon("M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z")
+val IMore = mkIcon("M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z")
 val IHead = mkIcon("M12 1c-4.97 0-9 4.03-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.87 3.13-7 7-7s7 3.13 7 7v2h-4v8h3c1.66 0 3-1.34 3-3v-7c0-4.97-4.03-9-9-9z")
 
 @Composable
@@ -448,13 +462,36 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     val favUrls = remember(favs) { favs.map { it.url }.toHashSet() }
     val hh = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 112.dp
     val layer = rememberGraphicsLayer()
+    val frost = remember { if (Build.VERSION.SDK_INT >= 31) frostEffect(110f) else null }
+    var menuMore by remember { mutableStateOf(false) }
+    var lastMain by remember { mutableStateOf(0) }
+    var drag by remember { mutableStateOf(0f) }
 
-    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF040508), Color(0xFF0C0E18))))) {
-        Box(Modifier.fillMaxSize().drawBehind {
-            drawRect(Brush.radialGradient(listOf(Color(0x664B3AA8), Color.Transparent), Offset(size.width * 0.1f, size.height * 0.05f), size.width * 0.9f))
-            drawRect(Brush.radialGradient(listOf(Color(0x550A6C94), Color.Transparent), Offset(size.width * 0.95f, size.height * 0.95f), size.width * 0.9f))
-        })
-        Box(Modifier.fillMaxSize().drawWithContent { layer.record { this@drawWithContent.drawContent() }; drawLayer(layer) }) {
+    // السحب يمين أو يسار يبدّل بين القائمة الرئيسية والمفضلة
+    fun swapTab() {
+        if (tab == -1) tab = lastMain else { lastMain = tab; tab = -1 }
+    }
+
+    Box(
+        Modifier.fillMaxSize().background(Color(0xFF040508))
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { drag = 0f },
+                    onDragEnd = { if (kotlin.math.abs(drag) > 140f) swapTab() },
+                    onHorizontalDrag = { _, d -> drag += d }
+                )
+            }
+    ) {
+        // الخلفية والقنوات كلها تتسجل في طبقة وحدة، وتنرسم تحت الهيدر فقط
+        Box(Modifier.fillMaxSize().drawWithContent {
+            layer.record { this@drawWithContent.drawContent() }
+            clipRect(top = hh.toPx()) { drawLayer(layer) }
+        }) {
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF040508), Color(0xFF0C0E18)))))
+            Box(Modifier.fillMaxSize().drawBehind {
+                drawRect(Brush.radialGradient(listOf(Color(0x664B3AA8), Color.Transparent), Offset(size.width * 0.1f, size.height * 0.05f), size.width * 0.9f))
+                drawRect(Brush.radialGradient(listOf(Color(0x550A6C94), Color.Transparent), Offset(size.width * 0.95f, size.height * 0.95f), size.width * 0.9f))
+            })
             LazyVerticalGrid(
                 state = gridState,
                 columns = GridCells.Adaptive(96.dp),
@@ -466,17 +503,28 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                 items(shown, contentType = { "tile" }) { ch -> Tile(ch, ch.url in favUrls, onLong = { toggleFav(ch) }) { start(ch) } }
             }
         }
-        // الهيدر: زجاج مضبب حقيقي يضبب القنوات اللي تمر تحته
+        // الهيدر: زجاج مضبب حقيقي، نفس الطبقة لكن مموهة بقوة
         Box(Modifier.align(Alignment.TopStart).fillMaxWidth().height(hh)) {
             Box(Modifier.fillMaxSize()
-                .graphicsLayer { renderEffect = BlurEffect(45f, 45f, TileMode.Clamp); clip = true }
+                .graphicsLayer { renderEffect = frost; clip = true }
                 .drawBehind { drawLayer(layer) })
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.White.copy(0.14f), Color.White.copy(0.05f)))))
-            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(1.dp).background(Color.White.copy(0.18f)))
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.White.copy(0.20f), Color.White.copy(0.07f)))))
+            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(1.dp)
+                .background(Brush.horizontalGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.12f), Color.White.copy(0.45f)))))
             Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
-                Text("Glass IPTV", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(vertical = 10.dp))
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Glass IPTV", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f).padding(vertical = 10.dp))
+                    Box {
+                        Box(Modifier.size(40.dp).glass(14.dp).clickable { menuMore = true }, contentAlignment = Alignment.Center) {
+                            Icon(IMore, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                        }
+                        DropdownMenu(expanded = menuMore, onDismissRequest = { menuMore = false }) {
+                            DropdownMenuItem(text = { Text("إضافة رابط") }, onClick = { menuMore = false; showAdd = true })
+                        }
+                    }
+                }
+                LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
                     item { Chip("★ المفضلة", tab == -1) { tab = -1 } }
                     itemsIndexed(lists) { i, u ->
                         Chip(u.substringAfterLast('/').substringBefore('?').removeSuffix(".m3u").ifEmpty { "قائمة" }.take(16), tab == i, onLong = {
@@ -485,7 +533,6 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                             tab = if (lists.isEmpty()) -1 else 0
                         }) { tab = i }
                     }
-                    item { Chip("＋ رابط", false) { showAdd = true } }
                 }
             }
         }
