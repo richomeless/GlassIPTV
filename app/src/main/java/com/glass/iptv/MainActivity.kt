@@ -15,10 +15,12 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -59,7 +62,7 @@ import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
 
-data class Channel(val name: String, val url: String, val logo: String = "")
+data class Channel(val name: String, val url: String, val logo: String = "", val ref: String = "", val ua: String = "")
 
 class Store(ctx: Context) {
     private val p = ctx.getSharedPreferences("glass", Context.MODE_PRIVATE)
@@ -69,10 +72,10 @@ class Store(ctx: Context) {
     fun savePlaylists(l: List<String>) = p.edit().putString("pl", l.joinToString("\n")).apply()
     fun favs(): List<Channel> = (p.getString("fav", "") ?: "").split("\n").filter { it.isNotBlank() }.map {
         val f = it.split("\t")
-        Channel(f[0], f.getOrElse(1) { "" }, f.getOrElse(2) { "" })
+        Channel(f[0], f.getOrElse(1) { "" }, f.getOrElse(2) { "" }, f.getOrElse(3) { "" }, f.getOrElse(4) { "" })
     }
-    fun saveFavs(l: List<Channel>) =
-        p.edit().putString("fav", l.joinToString("\n") { "${it.name}\t${it.url}\t${it.logo}" }).apply()
+    fun saveFavs(l: List<Channel>) = p.edit().putString("fav",
+        l.joinToString("\n") { "${it.name}\t${it.url}\t${it.logo}\t${it.ref}\t${it.ua}" }).apply()
 }
 
 class MainActivity : ComponentActivity() {
@@ -136,23 +139,19 @@ fun Chip(text: String, selected: Boolean, onLong: () -> Unit = {}, onClick: () -
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ChannelRow(c: Channel, fav: Boolean, onPlay: () -> Unit, onFav: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().glass(16.dp).clickable(onClick = onPlay).padding(10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        AsyncImage(
-            model = c.logo.ifEmpty { null }, contentDescription = null, contentScale = ContentScale.Fit,
-            modifier = Modifier.size(46.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(0.08f))
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(c.name, color = Color.White, maxLines = 1, modifier = Modifier.weight(1f))
-        Text(
-            if (fav) "★" else "☆", fontSize = 24.sp,
-            color = if (fav) Color(0xFFFFD60A) else Color.White.copy(0.7f),
-            modifier = Modifier.clickable(onClick = onFav).padding(8.dp)
-        )
+fun Tile(c: Channel, fav: Boolean, onLong: () -> Unit, onClick: () -> Unit) {
+    Column(Modifier.combinedClickable(onClick = onClick, onLongClick = onLong), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.fillMaxWidth().aspectRatio(1f).glass(22.dp), contentAlignment = Alignment.Center) {
+            if (c.logo.isEmpty()) Text(c.name.take(1), color = Color.White, fontSize = 28.sp)
+            else AsyncImage(model = c.logo, contentDescription = null, contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize().padding(14.dp))
+            if (fav) Text("★", color = Color(0xFFFFD60A), fontSize = 16.sp,
+                modifier = Modifier.align(Alignment.TopEnd).padding(6.dp))
+        }
+        Text(c.name, color = Color.White.copy(0.9f), fontSize = 12.sp, maxLines = 2,
+            textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
     }
 }
 
@@ -176,17 +175,37 @@ fun loadPlaylist(u: String): List<Channel> {
         val text = r.readText()
         if (text.contains("#EXT-X-")) return emptyList()
         val out = mutableListOf<Channel>()
-        var name = ""; var logo = ""
+        var name = ""; var logo = ""; var ref = ""; var ua = ""
         text.lineSequence().map { it.trim() }.forEach { l ->
             if (l.startsWith("#EXTINF")) {
                 name = l.substringAfterLast(",").trim().replace("\t", " ")
                 logo = logoRe.find(l)?.groupValues?.get(1) ?: ""
+                ref = ""; ua = ""
+            } else if (l.startsWith("#EXTVLCOPT:")) {
+                val kv = l.removePrefix("#EXTVLCOPT:")
+                if (kv.startsWith("http-referrer=") || kv.startsWith("http-referer=")) ref = kv.substringAfter("=")
+                else if (kv.startsWith("http-user-agent=")) ua = kv.substringAfter("=")
             } else if (l.isNotEmpty() && !l.startsWith("#")) {
-                out += Channel(name.ifEmpty { l }, l, logo); name = ""; logo = ""
+                out += Channel(name.ifEmpty { l }, l, logo, ref, ua); name = ""; logo = ""; ref = ""; ua = ""
             }
         }
         return out
     } catch (e: Exception) { return emptyList() }
+}
+
+// يفحص الرابط بنفس الهيدرز ويرجع رد السيرفر، عشان نعرف سبب فشل القناة
+suspend fun probe(c: Channel): String = withContext(Dispatchers.IO) {
+    try {
+        val k = URL(c.url).openConnection() as HttpURLConnection
+        k.connectTimeout = 8000; k.readTimeout = 8000
+        k.setRequestProperty("User-Agent", c.ua.ifEmpty { BROWSER_UA })
+        if (c.ref.isNotEmpty()) k.setRequestProperty("Referer", c.ref)
+        val code = k.responseCode
+        val s = if (code < 400) k.inputStream else k.errorStream
+        val buf = CharArray(70)
+        val n = s?.bufferedReader()?.read(buf) ?: 0
+        "HTTP $code: " + String(buf, 0, maxOf(n, 0)).replace("\n", " ")
+    } catch (e: Exception) { e.javaClass.simpleName }
 }
 
 @Composable
@@ -200,9 +219,12 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     var channels by remember { mutableStateOf(listOf<Channel>()) }
     var loading by remember { mutableStateOf(false) }
     var url by remember { mutableStateOf("") }
+    var showAdd by remember { mutableStateOf(false) }
     var playing by remember { mutableStateOf(player?.isPlaying == true) }
     var error by remember { mutableStateOf<String?>(null) }
     var full by remember { mutableStateOf(false) }
+    var cur by remember { mutableStateOf<Channel?>(null) }
+    var ui by remember { mutableStateOf(true) }
     var quals by remember { mutableStateOf(listOf<Pair<Int, TrackSelectionOverride>>()) }
     var qLabel by remember { mutableStateOf("تلقائي") }
     var menu by remember { mutableStateOf(false) }
@@ -211,7 +233,12 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     DisposableEffect(player) {
         val l = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying; if (isPlaying) error = null }
-            override fun onPlayerError(e: PlaybackException) { error = "تعذّر تشغيل القناة (${e.errorCodeName})" }
+            override fun onPlayerError(e: PlaybackException) {
+                val msg = "تعذّر تشغيل القناة (${e.errorCodeName})"
+                error = msg
+                val c = cur
+                if (c != null) scope.launch { error = msg + "\n" + probe(c) }
+            }
             override fun onTracksChanged(tracks: Tracks) {
                 quals = tracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }.flatMap { g ->
                     (0 until g.length).filter { g.isTrackSupported(it) && g.getTrackFormat(it).height > 0 }
@@ -232,7 +259,8 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     }
 
     fun start(c: Channel) {
-        error = null; qLabel = "تلقائي"
+        error = null; qLabel = "تلقائي"; cur = c; ui = true
+        Hdr.ref = c.ref; Hdr.ua = c.ua
         player?.let { p ->
             val b = MediaItem.Builder().setUri(c.url)
                 .setMediaMetadata(MediaMetadata.Builder().setTitle(c.name).build())
@@ -261,21 +289,79 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         } else c.show(WindowInsetsCompat.Type.systemBars())
     }
 
+    fun close() {
+        if (full) setFull(false)
+        player?.stop(); cur = null; error = null
+    }
+
     fun toggleFav(c: Channel) {
         favs = if (favs.any { it.url == c.url }) favs.filter { it.url != c.url } else favs + c
         store.saveFavs(favs)
     }
 
-    BackHandler(full) { setFull(false) }
+    fun addUrl() {
+        val u = url.trim()
+        if (u.isEmpty()) return
+        showAdd = false
+        scope.launch {
+            val list = withContext(Dispatchers.IO) { loadPlaylist(u) }
+            if (list.isEmpty()) start(Channel("بث مباشر", u))
+            else {
+                if (u !in lists) { lists = lists + u; store.savePlaylists(lists) }
+                tab = lists.indexOf(u)
+            }
+            url = ""
+        }
+    }
+
+    BackHandler(cur != null) { close() }
 
     if (inPip) {
         Box(Modifier.fillMaxSize().background(Color.Black)) { player?.let { Video(it) } }
         return
     }
-    if (full) {
-        Box(Modifier.fillMaxSize().background(Color.Black)) {
+
+    val c = cur
+    if (c != null) {
+        val isFav = favs.any { it.url == c.url }
+        Box(
+            Modifier.fillMaxSize().background(Color.Black)
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { ui = !ui }
+        ) {
             player?.let { Video(it) }
-            GlassButton("✕", Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(16.dp).width(64.dp)) { setFull(false) }
+            error?.let {
+                Text(it, color = Color(0xFFFF6B6B), fontSize = 13.sp, textAlign = TextAlign.Center,
+                    modifier = Modifier.align(Alignment.Center).padding(24.dp))
+            }
+            if (ui) {
+                Row(
+                    Modifier.align(Alignment.TopStart).fillMaxWidth().statusBarsPadding().padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically
+                ) {
+                    GlassButton("رجوع", Modifier.width(80.dp)) { close() }
+                    Text(c.name, color = Color.White, maxLines = 1, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    GlassButton(if (isFav) "★" else "☆", Modifier.width(56.dp)) { toggleFav(c) }
+                }
+                Row(
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    GlassButton(if (playing) "إيقاف" else "تشغيل", Modifier.weight(1f)) {
+                        player?.let { if (it.isPlaying) it.pause() else it.play() }
+                    }
+                    Box(Modifier.weight(1f)) {
+                        GlassButton(qLabel, Modifier.fillMaxWidth()) { menu = true }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(text = { Text("تلقائي") }, onClick = { setQuality(null, "تلقائي"); menu = false })
+                            quals.forEach { (h, o) ->
+                                DropdownMenuItem(text = { Text("${h}p") }, onClick = { setQuality(o, "${h}p"); menu = false })
+                            }
+                        }
+                    }
+                    GlassButton(if (full) "تصغير" else "تكبير", Modifier.weight(1f)) { setFull(!full) }
+                    GlassButton("مصغّرة", Modifier.weight(1f), onPip)
+                }
+            }
         }
         return
     }
@@ -286,34 +372,9 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         Box(Modifier.size(280.dp).offset((-90).dp, (-50).dp).blur(100.dp).background(Color(0xFF4B3AA8).copy(0.45f), CircleShape))
         Box(Modifier.size(240.dp).align(Alignment.BottomEnd).offset(70.dp, 50.dp).blur(100.dp).background(Color(0xFF0A6C94).copy(0.4f), CircleShape))
 
-        Column(
-            Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text("Glass IPTV", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold)
-
-            Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).glass(24.dp), contentAlignment = Alignment.Center) {
-                if (player != null) Video(player) else CircularProgressIndicator(color = Color.White)
-            }
-            error?.let { Text(it, color = Color(0xFFFF6B6B), fontSize = 13.sp) }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                GlassButton(if (playing) "إيقاف" else "تشغيل", Modifier.weight(1f)) {
-                    player?.let { if (it.isPlaying) it.pause() else it.play() }
-                }
-                Box(Modifier.weight(1f)) {
-                    GlassButton(qLabel, Modifier.fillMaxWidth()) { menu = true }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(text = { Text("تلقائي") }, onClick = { setQuality(null, "تلقائي"); menu = false })
-                        quals.forEach { (h, o) ->
-                            DropdownMenuItem(text = { Text("${h}p") }, onClick = { setQuality(o, "${h}p"); menu = false })
-                        }
-                    }
-                }
-                GlassButton("تكبير", Modifier.weight(1f)) { setFull(true) }
-                GlassButton("مصغّرة", Modifier.weight(1f), onPip)
-            }
-
+        Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
+            Text("Glass IPTV", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(vertical = 10.dp))
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 item { Chip("★ المفضلة", tab == -1) { tab = -1 } }
                 itemsIndexed(lists) { i, u ->
@@ -323,40 +384,33 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         tab = if (lists.isEmpty()) -1 else 0
                     }) { tab = i }
                 }
+                item { Chip("＋ رابط", false) { showAdd = true } }
             }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextField(
-                    value = url, onValueChange = { url = it }, singleLine = true,
-                    placeholder = { Text("رابط قناة أو قائمة M3U", color = Color.White.copy(0.5f)) },
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent,
-                        focusedTextColor = Color.White, unfocusedTextColor = Color.White, cursorColor = Color.White
-                    ),
-                    modifier = Modifier.weight(1f).glass(18.dp)
-                )
-                GlassButton("إضافة", Modifier.width(80.dp)) {
-                    val u = url.trim()
-                    if (u.isEmpty()) return@GlassButton
-                    scope.launch {
-                        val list = withContext(Dispatchers.IO) { loadPlaylist(u) }
-                        if (list.isEmpty()) start(Channel("بث مباشر", u))
-                        else {
-                            if (u !in lists) { lists = lists + u; store.savePlaylists(lists) }
-                            tab = lists.indexOf(u)
-                        }
-                        url = ""
-                    }
-                }
-            }
-
-            if (loading) Text("جاري التحميل...", color = Color.White.copy(0.7f))
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spacer(Modifier.height(14.dp))
+            if (loading) Text("جاري التحميل...", color = Color.White.copy(0.7f), modifier = Modifier.padding(bottom = 8.dp))
+            if (tab == -1 && favs.isEmpty()) Text("اضغط مطولاً على أي قناة لإضافتها للمفضلة", color = Color.White.copy(0.6f))
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(96.dp),
+                contentPadding = PaddingValues(bottom = 48.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier.weight(1f)
+            ) {
                 items(shown) { ch ->
-                    ChannelRow(ch, favs.any { it.url == ch.url }, { start(ch) }, { toggleFav(ch) })
+                    Tile(ch, favs.any { it.url == ch.url }, onLong = { toggleFav(ch) }) { start(ch) }
                 }
             }
         }
     }
+
+    if (showAdd) AlertDialog(
+        onDismissRequest = { showAdd = false },
+        title = { Text("إضافة رابط") },
+        text = {
+            TextField(value = url, onValueChange = { url = it }, singleLine = true,
+                placeholder = { Text("رابط قناة أو قائمة M3U") })
+        },
+        confirmButton = { TextButton(onClick = { addUrl() }) { Text("إضافة") } },
+        dismissButton = { TextButton(onClick = { showAdd = false }) { Text("إلغاء") } }
+    )
 }
