@@ -6,12 +6,23 @@ plugins {
 android {
     namespace = "com.glass.iptv"
     compileSdk = 35
+    signingConfigs {
+        create("fixed") {
+            storeFile = file("fixed.keystore")
+            storePassword = "android"
+            keyAlias = "key"
+            keyPassword = "android"
+        }
+    }
     defaultConfig {
         applicationId = "com.glass.iptv"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
+    }
+    buildTypes {
+        getByName("debug") { signingConfig = signingConfigs.getByName("fixed") }
     }
     buildFeatures { compose = true }
     compileOptions {
