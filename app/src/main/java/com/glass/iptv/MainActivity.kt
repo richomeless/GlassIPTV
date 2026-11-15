@@ -37,7 +37,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.TileMode
-import androidx.compose.ui.graphics.drawscope.drawLayer
+import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.Color
@@ -68,6 +68,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.Dispatchers
@@ -144,11 +145,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-fun Modifier.glass(r: Dp = 24.dp): Modifier {
+// فرش الزجاج مشتركة بين كل العناصر عشان ما تنعاد صياغتها مع كل تمرير
+private val GlassFill = Brush.linearGradient(listOf(Color.White.copy(0.17f), Color.White.copy(0.05f)))
+private val GlassStroke = Brush.linearGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.06f), Color.White.copy(0.25f)))
+
+fun Modifier.glass(r: Dp = 24.dp, clipContent: Boolean = true): Modifier {
     val shape = RoundedCornerShape(r)
-    return this.clip(shape)
-        .background(Brush.linearGradient(listOf(Color.White.copy(0.17f), Color.White.copy(0.05f))))
-        .border(1.dp, Brush.linearGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.06f), Color.White.copy(0.25f))), shape)
+    val m = if (clipContent) this.clip(shape) else this
+    return m.background(GlassFill, shape).border(1.dp, GlassStroke, shape)
 }
 
 @Composable
@@ -184,9 +188,11 @@ fun GlassIcon(icon: ImageVector, modifier: Modifier = Modifier, tint: Color = Co
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun Chip(text: String, selected: Boolean, onLong: () -> Unit = {}, onClick: () -> Unit) {
+    // نفس الارتفاع ونفس الشكل لكل الأزرار، والتحديد يلوّن الخلفية بس
+    val shape = RoundedCornerShape(14.dp)
     Box(
         Modifier.height(40.dp).glass(14.dp)
-            .background(if (selected) Color.White.copy(0.22f) else Color.Transparent)
+            .background(if (selected) Color.White.copy(0.22f) else Color.Transparent, shape)
             .combinedClickable(onClick = onClick, onLongClick = onLong)
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center
@@ -196,15 +202,21 @@ fun Chip(text: String, selected: Boolean, onLong: () -> Unit = {}, onClick: () -
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun Tile(c: Channel, fav: Boolean, onLong: () -> Unit, onClick: () -> Unit) {
+    val ctx = LocalContext.current
     Column(Modifier.combinedClickable(onClick = onClick, onLongClick = onLong), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.fillMaxWidth().aspectRatio(1f).glass(22.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().aspectRatio(1f).glass(22.dp, clipContent = false), contentAlignment = Alignment.Center) {
             if (c.logo.isEmpty()) Text(c.name.take(1), color = Color.White, fontSize = 28.sp)
-            else AsyncImage(model = c.logo, contentDescription = null, contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize().padding(14.dp))
+            else {
+                // نصغّر الشعار وقت فك الضغط عشان التمرير يبقى سلس
+                val req = remember(c.logo) { ImageRequest.Builder(ctx).data(c.logo).size(180).crossfade(false).build() }
+                AsyncImage(model = req, contentDescription = null, contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize().padding(14.dp))
+            }
             if (fav) Text("★", color = Color(0xFFFFD60A), fontSize = 16.sp,
                 modifier = Modifier.align(Alignment.TopEnd).padding(6.dp))
         }
-        Text(c.name, color = Color.White.copy(0.9f), fontSize = 12.sp, maxLines = 2,
+        // سطرين دايماً عشان كل الصفوف بنفس الارتفاع
+        Text(c.name, color = Color.White.copy(0.9f), fontSize = 12.sp, maxLines = 2, minLines = 2,
             textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
     }
 }
@@ -285,8 +297,12 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     var pipMode by remember { mutableStateOf(store.pipMode()) }
     var menu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    // حالة الشبكة هنا فوق عشان ترجع لنفس المكان بعد الخروج من القناة
     val gridState = rememberLazyGridState()
-    LaunchedEffect(tab) { gridState.scrollToItem(0) }
+    var lastTab by remember { mutableStateOf(tab) }
+    LaunchedEffect(tab) {
+        if (tab != lastTab) { lastTab = tab; gridState.scrollToItem(0) }
+    }
 
     DisposableEffect(player) {
         val l = object : Player.Listener {
@@ -447,7 +463,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(shown) { ch -> Tile(ch, ch.url in favUrls, onLong = { toggleFav(ch) }) { start(ch) } }
+                items(shown, contentType = { "tile" }) { ch -> Tile(ch, ch.url in favUrls, onLong = { toggleFav(ch) }) { start(ch) } }
             }
         }
         // الهيدر: زجاج مضبب حقيقي يضبب القنوات اللي تمر تحته
