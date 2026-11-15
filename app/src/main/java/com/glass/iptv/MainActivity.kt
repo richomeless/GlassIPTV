@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,7 +31,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.drawscope.drawLayer
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -135,15 +144,17 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-fun Modifier.glass(r: Dp = 24.dp): Modifier = this
-    .clip(RoundedCornerShape(r))
-    .background(Brush.verticalGradient(listOf(Color.White.copy(0.22f), Color.White.copy(0.07f))))
-    .border(1.dp, Color.White.copy(0.28f), RoundedCornerShape(r))
+fun Modifier.glass(r: Dp = 24.dp): Modifier {
+    val shape = RoundedCornerShape(r)
+    return this.clip(shape)
+        .background(Brush.linearGradient(listOf(Color.White.copy(0.17f), Color.White.copy(0.05f))))
+        .border(1.dp, Brush.linearGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.06f), Color.White.copy(0.25f))), shape)
+}
 
 @Composable
 fun GlassButton(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(
-        modifier.glass(18.dp).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 14.dp),
+        modifier.height(52.dp).glass(18.dp).clickable(onClick = onClick).padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center
     ) { Text(text, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1) }
 }
@@ -165,7 +176,7 @@ val IHead = mkIcon("M12 1c-4.97 0-9 4.03-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.8
 @Composable
 fun GlassIcon(icon: ImageVector, modifier: Modifier = Modifier, tint: Color = Color.White, onClick: () -> Unit) {
     Box(
-        modifier.glass(18.dp).clickable(onClick = onClick).padding(vertical = 12.dp),
+        modifier.height(52.dp).glass(18.dp).clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) { Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(26.dp)) }
 }
@@ -173,13 +184,13 @@ fun GlassIcon(icon: ImageVector, modifier: Modifier = Modifier, tint: Color = Co
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun Chip(text: String, selected: Boolean, onLong: () -> Unit = {}, onClick: () -> Unit) {
-    Text(
-        text, color = Color.White, maxLines = 1, fontSize = 14.sp,
-        modifier = Modifier.glass(14.dp)
+    Box(
+        Modifier.height(40.dp).glass(14.dp)
             .background(if (selected) Color.White.copy(0.22f) else Color.Transparent)
             .combinedClickable(onClick = onClick, onLongClick = onLong)
-            .padding(horizontal = 14.dp, vertical = 9.dp)
-    )
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center
+    ) { Text(text, color = Color.White, maxLines = 1, fontSize = 14.sp) }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -274,6 +285,8 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     var pipMode by remember { mutableStateOf(store.pipMode()) }
     var menu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val gridState = rememberLazyGridState()
+    LaunchedEffect(tab) { gridState.scrollToItem(0) }
 
     DisposableEffect(player) {
         val l = object : Player.Listener {
@@ -416,40 +429,53 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     }
 
     val shown = if (tab == -1) favs else channels
+    val favUrls = remember(favs) { favs.map { it.url }.toHashSet() }
+    val hh = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 112.dp
+    val layer = rememberGraphicsLayer()
 
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF040508), Color(0xFF0C0E18))))) {
-        Box(Modifier.size(280.dp).offset((-90).dp, (-50).dp).blur(100.dp).background(Color(0xFF4B3AA8).copy(0.45f), CircleShape))
-        Box(Modifier.size(240.dp).align(Alignment.BottomEnd).offset(70.dp, 50.dp).blur(100.dp).background(Color(0xFF0A6C94).copy(0.4f), CircleShape))
-
-        Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
-            Text("Glass IPTV", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(vertical = 10.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                item { Chip("★ المفضلة", tab == -1) { tab = -1 } }
-                itemsIndexed(lists) { i, u ->
-                    Chip(u.substringAfterLast('/').substringBefore('?').removeSuffix(".m3u").ifEmpty { "قائمة" }.take(16), tab == i, onLong = {
-                        lists = lists.filterIndexed { j, _ -> j != i }
-                        store.savePlaylists(lists)
-                        tab = if (lists.isEmpty()) -1 else 0
-                    }) { tab = i }
-                }
-                item { Chip("＋ رابط", false) { showAdd = true } }
-            }
-            Spacer(Modifier.height(14.dp))
-            if (loading) Text("جاري التحميل...", color = Color.White.copy(0.7f), modifier = Modifier.padding(bottom = 8.dp))
-            if (tab == -1 && favs.isEmpty()) Text("اضغط مطولاً على أي قناة لإضافتها للمفضلة", color = Color.White.copy(0.6f))
+        Box(Modifier.fillMaxSize().drawBehind {
+            drawRect(Brush.radialGradient(listOf(Color(0x664B3AA8), Color.Transparent), Offset(size.width * 0.1f, size.height * 0.05f), size.width * 0.9f))
+            drawRect(Brush.radialGradient(listOf(Color(0x550A6C94), Color.Transparent), Offset(size.width * 0.95f, size.height * 0.95f), size.width * 0.9f))
+        })
+        Box(Modifier.fillMaxSize().drawWithContent { layer.record { this@drawWithContent.drawContent() }; drawLayer(layer) }) {
             LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Adaptive(96.dp),
-                contentPadding = PaddingValues(bottom = 48.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = hh + 8.dp, bottom = 48.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxSize()
             ) {
-                items(shown) { ch ->
-                    Tile(ch, favs.any { it.url == ch.url }, onLong = { toggleFav(ch) }) { start(ch) }
+                items(shown) { ch -> Tile(ch, ch.url in favUrls, onLong = { toggleFav(ch) }) { start(ch) } }
+            }
+        }
+        // الهيدر: زجاج مضبب حقيقي يضبب القنوات اللي تمر تحته
+        Box(Modifier.align(Alignment.TopStart).fillMaxWidth().height(hh)) {
+            Box(Modifier.fillMaxSize()
+                .graphicsLayer { renderEffect = BlurEffect(45f, 45f, TileMode.Clamp); clip = true }
+                .drawBehind { drawLayer(layer) })
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.White.copy(0.14f), Color.White.copy(0.05f)))))
+            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(1.dp).background(Color.White.copy(0.18f)))
+            Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
+                Text("Glass IPTV", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(vertical = 10.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item { Chip("★ المفضلة", tab == -1) { tab = -1 } }
+                    itemsIndexed(lists) { i, u ->
+                        Chip(u.substringAfterLast('/').substringBefore('?').removeSuffix(".m3u").ifEmpty { "قائمة" }.take(16), tab == i, onLong = {
+                            lists = lists.filterIndexed { j, _ -> j != i }
+                            store.savePlaylists(lists)
+                            tab = if (lists.isEmpty()) -1 else 0
+                        }) { tab = i }
+                    }
+                    item { Chip("＋ رابط", false) { showAdd = true } }
                 }
             }
         }
+        if (loading) Text("جاري التحميل...", color = Color.White.copy(0.7f), modifier = Modifier.align(Alignment.Center))
+        else if (tab == -1 && favs.isEmpty()) Text("اضغط مطولاً على أي قناة لإضافتها للمفضلة", color = Color.White.copy(0.6f),
+            textAlign = TextAlign.Center, modifier = Modifier.align(Alignment.Center).padding(32.dp))
     }
 
     if (showAdd) AlertDialog(
