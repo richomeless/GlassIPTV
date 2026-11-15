@@ -16,7 +16,13 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -236,10 +242,10 @@ fun Tile(c: Channel, fav: Boolean, onLong: () -> Unit, onClick: () -> Unit) {
 }
 
 @Composable
-fun Video(p: Player) = AndroidView(
+fun Video(p: Player, modifier: Modifier = Modifier) = AndroidView(
     factory = { PlayerView(it).apply { useController = false; player = p } },
     update = { it.player = p },
-    modifier = Modifier.fillMaxSize()
+    modifier = modifier.fillMaxSize()
 )
 
 val logoRe = Regex("tvg-logo=\"([^\"]*)\"")
@@ -305,6 +311,8 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     var full by remember { mutableStateOf(false) }
     var cur by remember { mutableStateOf<Channel?>(null) }
     var ui by remember { mutableStateOf(true) }
+    var zoom by remember { mutableStateOf(1f) }
+    val uiAlpha by animateFloatAsState(targetValue = if (ui) 1f else 0f, animationSpec = tween(250), label = "ui")
     var quals by remember { mutableStateOf(listOf<Pair<Int, TrackSelectionOverride>>()) }
     var qSel by remember { mutableStateOf<Int?>(null) }
     var vh by remember { mutableStateOf(0) }
@@ -313,9 +321,24 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     val scope = rememberCoroutineScope()
     // حالة الشبكة هنا فوق عشان ترجع لنفس المكان بعد الخروج من القناة
     val gridState = rememberLazyGridState()
-    var lastTab by remember { mutableStateOf(tab) }
+    val favState = rememberLazyGridState()
+    val pager = rememberPagerState(pageCount = { 2 })
+    var mainTab by remember { mutableStateOf(0) }
+    var lastMainTab by remember { mutableStateOf(0) }
+    // الصفحة 0 = القائمة الرئيسية، الصفحة 1 = المفضلة، والسحب بينهم حي
     LaunchedEffect(tab) {
-        if (tab != lastTab) { lastTab = tab; gridState.scrollToItem(0) }
+        if (tab >= 0) {
+            mainTab = tab
+            if (tab != lastMainTab) { lastMainTab = tab; gridState.scrollToItem(0) }
+        }
+        val target = if (tab == -1) 1 else 0
+        if (pager.currentPage != target) pager.animateScrollToPage(target)
+    }
+    LaunchedEffect(pager) {
+        snapshotFlow { pager.settledPage }.collect { pg ->
+            if (pg == 1 && tab != -1) tab = -1
+            else if (pg == 0 && tab == -1) tab = mainTab
+        }
     }
 
     DisposableEffect(player) {
@@ -339,16 +362,16 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         onDispose { player?.removeListener(l) }
     }
 
-    LaunchedEffect(tab, lists) {
-        if (tab in lists.indices) {
+    LaunchedEffect(mainTab, lists) {
+        if (mainTab in lists.indices) {
             loading = true; channels = emptyList()
-            channels = withContext(Dispatchers.IO) { loadPlaylist(lists[tab]) }
+            channels = withContext(Dispatchers.IO) { loadPlaylist(lists[mainTab]) }
             loading = false
         }
     }
 
     fun start(c: Channel) {
-        error = null; qSel = null; vh = 0; cur = c; ui = true
+        error = null; qSel = null; vh = 0; cur = c; ui = true; zoom = 1f
         Hdr.ref = c.ref; Hdr.ua = c.ua
         player?.let { p ->
             val b = MediaItem.Builder().setUri(c.url)
@@ -380,7 +403,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
 
     fun close() {
         if (full) setFull(false)
-        player?.stop(); cur = null; error = null
+        player?.stop(); cur = null; error = null; zoom = 1f
     }
 
     fun toggleFav(c: Channel) {
@@ -415,14 +438,34 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         val isFav = favs.any { it.url == c.url }
         Box(
             Modifier.fillMaxSize().background(Color.Black)
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { ui = !ui }
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown()
+                        waitForUpOrCancellation() ?: return@awaitEachGesture
+                        // ضغطة وحدة: إظهار/إخفاء الأزرار. ضغطتين مع سحب: زوم
+                        val second = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) { awaitFirstDown() }
+                        if (second == null) { ui = !ui; return@awaitEachGesture }
+                        var lastY = second.position.y
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            val ch = ev.changes.firstOrNull() ?: break
+                            if (!ch.pressed) break
+                            val dy = ch.position.y - lastY
+                            lastY = ch.position.y
+                            if (dy != 0f) {
+                                zoom = (zoom * kotlin.math.exp(dy / 450f)).coerceIn(1f, 4f)
+                                ch.consume()
+                            }
+                        }
+                    }
+                }
         ) {
-            player?.let { Video(it) }
+            player?.let { Video(it, Modifier.graphicsLayer { scaleX = zoom; scaleY = zoom }) }
             error?.let {
                 Text(it, color = Color(0xFFFF6B6B), fontSize = 13.sp, textAlign = TextAlign.Center,
                     modifier = Modifier.align(Alignment.Center).padding(24.dp))
             }
-            if (ui) {
+            if (uiAlpha > 0.01f) Box(Modifier.fillMaxSize().graphicsLayer { alpha = uiAlpha }) {
                 Row(
                     Modifier.align(Alignment.TopStart).fillMaxWidth().statusBarsPadding().padding(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically
@@ -458,30 +501,13 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         return
     }
 
-    val shown = if (tab == -1) favs else channels
     val favUrls = remember(favs) { favs.map { it.url }.toHashSet() }
     val hh = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 112.dp
     val layer = rememberGraphicsLayer()
     val frost = remember { if (Build.VERSION.SDK_INT >= 31) frostEffect(110f) else null }
     var menuMore by remember { mutableStateOf(false) }
-    var lastMain by remember { mutableStateOf(0) }
-    var drag by remember { mutableStateOf(0f) }
 
-    // السحب يمين أو يسار يبدّل بين القائمة الرئيسية والمفضلة
-    fun swapTab() {
-        if (tab == -1) tab = lastMain else { lastMain = tab; tab = -1 }
-    }
-
-    Box(
-        Modifier.fillMaxSize().background(Color(0xFF040508))
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragStart = { drag = 0f },
-                    onDragEnd = { if (kotlin.math.abs(drag) > 140f) swapTab() },
-                    onHorizontalDrag = { _, d -> drag += d }
-                )
-            }
-    ) {
+    Box(Modifier.fillMaxSize().background(Color(0xFF040508))) {
         // الخلفية والقنوات كلها تتسجل في طبقة وحدة، وتنرسم تحت الهيدر فقط
         Box(Modifier.fillMaxSize().drawWithContent {
             layer.record { this@drawWithContent.drawContent() }
@@ -492,15 +518,26 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                 drawRect(Brush.radialGradient(listOf(Color(0x664B3AA8), Color.Transparent), Offset(size.width * 0.1f, size.height * 0.05f), size.width * 0.9f))
                 drawRect(Brush.radialGradient(listOf(Color(0x550A6C94), Color.Transparent), Offset(size.width * 0.95f, size.height * 0.95f), size.width * 0.9f))
             })
-            LazyVerticalGrid(
-                state = gridState,
-                columns = GridCells.Adaptive(96.dp),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = hh + 8.dp, bottom = 48.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(shown, contentType = { "tile" }) { ch -> Tile(ch, ch.url in favUrls, onLong = { toggleFav(ch) }) { start(ch) } }
+            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
+                val isFavPage = page == 1
+                Box(Modifier.fillMaxSize()) {
+                    LazyVerticalGrid(
+                        state = if (isFavPage) favState else gridState,
+                        columns = GridCells.Adaptive(96.dp),
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = hh + 8.dp, bottom = 48.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(if (isFavPage) favs else channels, contentType = { "tile" }) { ch ->
+                            Tile(ch, ch.url in favUrls, onLong = { toggleFav(ch) }) { start(ch) }
+                        }
+                    }
+                    if (isFavPage && favs.isEmpty()) Text("اضغط مطولاً على أي قناة لإضافتها للمفضلة", color = Color.White.copy(0.6f),
+                        textAlign = TextAlign.Center, modifier = Modifier.align(Alignment.Center).padding(32.dp))
+                    else if (!isFavPage && loading) Text("جاري التحميل...", color = Color.White.copy(0.7f),
+                        modifier = Modifier.align(Alignment.Center))
+                }
             }
         }
         // الهيدر: زجاج مضبب حقيقي، نفس الطبقة لكن مموهة بقوة
@@ -536,9 +573,6 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                 }
             }
         }
-        if (loading) Text("جاري التحميل...", color = Color.White.copy(0.7f), modifier = Modifier.align(Alignment.Center))
-        else if (tab == -1 && favs.isEmpty()) Text("اضغط مطولاً على أي قناة لإضافتها للمفضلة", color = Color.White.copy(0.6f),
-            textAlign = TextAlign.Center, modifier = Modifier.align(Alignment.Center).padding(32.dp))
     }
 
     if (showAdd) AlertDialog(
