@@ -202,7 +202,7 @@ suspend fun probe(c: Channel): String = withContext(Dispatchers.IO) {
         if (c.ref.isNotEmpty()) k.setRequestProperty("Referer", c.ref)
         val code = k.responseCode
         val s = if (code < 400) k.inputStream else k.errorStream
-        val buf = CharArray(70)
+        val buf = CharArray(300)
         val n = s?.bufferedReader()?.read(buf) ?: 0
         "HTTP $code: " + String(buf, 0, maxOf(n, 0)).replace("\n", " ")
     } catch (e: Exception) { e.javaClass.simpleName }
