@@ -10,6 +10,7 @@ import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -31,6 +32,9 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -50,6 +54,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.media3.ui.PlayerView
@@ -70,6 +75,8 @@ class Store(ctx: Context) {
         p.getString("pl", null)?.split("\n")?.filter { it.isNotBlank() }
             ?: listOf("https://iptv-org.github.io/iptv/languages/ara.m3u")
     fun savePlaylists(l: List<String>) = p.edit().putString("pl", l.joinToString("\n")).apply()
+    fun pipMode(): Boolean = p.getBoolean("pip", true)
+    fun setPipMode(b: Boolean) = p.edit().putBoolean("pip", b).apply()
     fun favs(): List<Channel> = (p.getString("fav", "") ?: "").split("\n").filter { it.isNotBlank() }.map {
         val f = it.split("\t")
         Channel(f[0], f.getOrElse(1) { "" }, f.getOrElse(2) { "" }, f.getOrElse(3) { "" }, f.getOrElse(4) { "" })
@@ -99,9 +106,23 @@ class MainActivity : ComponentActivity() {
         enterPictureInPictureMode(p)
     }
 
-    override fun onUserLeaveHint() {
-        if (controller.value?.isPlaying == true) enterPip()
+    private fun pipOn() = getSharedPreferences("glass", Context.MODE_PRIVATE).getBoolean("pip", true)
+
+    private fun setVideo(on: Boolean) {
+        controller.value?.let { c ->
+            c.trackSelectionParameters = c.trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !on).build()
+        }
     }
+
+    override fun onUserLeaveHint() {
+        if (controller.value?.isPlaying == true && pipOn()) enterPip()
+    }
+
+    override fun onStart() { super.onStart(); setVideo(true) }
+
+    // وضع الصوت فقط: نوقف الفيديو لما التطبيق يروح للخلفية عشان نوفر النت والبطارية
+    override fun onStop() { super.onStop(); if (!pipOn()) setVideo(false) }
 
     override fun onPictureInPictureModeChanged(isInPip: Boolean, newConfig: Configuration) {
         super.onPictureInPictureModeChanged(isInPip, newConfig)
@@ -125,6 +146,28 @@ fun GlassButton(text: String, modifier: Modifier = Modifier, onClick: () -> Unit
         modifier.glass(18.dp).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 14.dp),
         contentAlignment = Alignment.Center
     ) { Text(text, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1) }
+}
+
+fun mkIcon(p: String): ImageVector = ImageVector.Builder(
+    defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f
+).addPath(addPathNodes(p), fill = SolidColor(Color.White)).build()
+
+val IPlay = mkIcon("M8 5v14l11-7z")
+val IPause = mkIcon("M6 19h4V5H6v14zm8-14v14h4V5h-4z")
+val IBack = mkIcon("M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z")
+val IStarOn = mkIcon("M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z")
+val IStarOff = mkIcon("M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.04 4.38.38-3.32 2.88 1 4.28L12 15.4z")
+val IFull = mkIcon("M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z")
+val IFullExit = mkIcon("M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z")
+val IPip = mkIcon("M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z")
+val IHead = mkIcon("M12 1c-4.97 0-9 4.03-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.87 3.13-7 7-7s7 3.13 7 7v2h-4v8h3c1.66 0 3-1.34 3-3v-7c0-4.97-4.03-9-9-9z")
+
+@Composable
+fun GlassIcon(icon: ImageVector, modifier: Modifier = Modifier, tint: Color = Color.White, onClick: () -> Unit) {
+    Box(
+        modifier.glass(18.dp).clickable(onClick = onClick).padding(vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) { Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(26.dp)) }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -226,7 +269,9 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     var cur by remember { mutableStateOf<Channel?>(null) }
     var ui by remember { mutableStateOf(true) }
     var quals by remember { mutableStateOf(listOf<Pair<Int, TrackSelectionOverride>>()) }
-    var qLabel by remember { mutableStateOf("تلقائي") }
+    var qSel by remember { mutableStateOf<Int?>(null) }
+    var vh by remember { mutableStateOf(0) }
+    var pipMode by remember { mutableStateOf(store.pipMode()) }
     var menu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -239,6 +284,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                 val c = cur
                 if (c != null) scope.launch { error = msg + "\n" + probe(c) }
             }
+            override fun onVideoSizeChanged(size: VideoSize) { vh = size.height }
             override fun onTracksChanged(tracks: Tracks) {
                 quals = tracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }.flatMap { g ->
                     (0 until g.length).filter { g.isTrackSupported(it) && g.getTrackFormat(it).height > 0 }
@@ -259,7 +305,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     }
 
     fun start(c: Channel) {
-        error = null; qLabel = "تلقائي"; cur = c; ui = true
+        error = null; qSel = null; vh = 0; cur = c; ui = true
         Hdr.ref = c.ref; Hdr.ua = c.ua
         player?.let { p ->
             val b = MediaItem.Builder().setUri(c.url)
@@ -269,13 +315,13 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         }
     }
 
-    fun setQuality(o: TrackSelectionOverride?, label: String) {
+    fun setQuality(o: TrackSelectionOverride?, h: Int?) {
         player?.let { p ->
             val b = p.trackSelectionParameters.buildUpon()
             if (o == null) b.clearOverridesOfType(C.TRACK_TYPE_VIDEO) else b.setOverrideForType(o)
             p.trackSelectionParameters = b.build()
         }
-        qLabel = label
+        qSel = h
     }
 
     fun setFull(on: Boolean) {
@@ -338,28 +384,31 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                     Modifier.align(Alignment.TopStart).fillMaxWidth().statusBarsPadding().padding(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically
                 ) {
-                    GlassButton("رجوع", Modifier.width(80.dp)) { close() }
+                    GlassIcon(IBack, Modifier.width(64.dp)) { close() }
                     Text(c.name, color = Color.White, maxLines = 1, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                    GlassButton(if (isFav) "★" else "☆", Modifier.width(56.dp)) { toggleFav(c) }
+                    GlassIcon(if (isFav) IStarOn else IStarOff, Modifier.width(64.dp), if (isFav) Color(0xFFFFD60A) else Color.White) { toggleFav(c) }
                 }
                 Row(
                     Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    GlassButton(if (playing) "إيقاف" else "تشغيل", Modifier.weight(1f)) {
+                    GlassIcon(if (playing) IPause else IPlay, Modifier.weight(1f)) {
                         player?.let { if (it.isPlaying) it.pause() else it.play() }
                     }
                     Box(Modifier.weight(1f)) {
-                        GlassButton(qLabel, Modifier.fillMaxWidth()) { menu = true }
+                        GlassButton(if (qSel != null) "$qSel" else if (vh > 0) "$vh" else "—", Modifier.fillMaxWidth()) { menu = true }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                            DropdownMenuItem(text = { Text("تلقائي") }, onClick = { setQuality(null, "تلقائي"); menu = false })
+                            DropdownMenuItem(text = { Text("تلقائي") }, onClick = { setQuality(null, null); menu = false })
                             quals.forEach { (h, o) ->
-                                DropdownMenuItem(text = { Text("${h}p") }, onClick = { setQuality(o, "${h}p"); menu = false })
+                                DropdownMenuItem(text = { Text("${h}p") }, onClick = { setQuality(o, h); menu = false })
                             }
                         }
                     }
-                    GlassButton(if (full) "تصغير" else "تكبير", Modifier.weight(1f)) { setFull(!full) }
-                    GlassButton("مصغّرة", Modifier.weight(1f), onPip)
+                    GlassIcon(if (full) IFullExit else IFull, Modifier.weight(1f)) { setFull(!full) }
+                    GlassIcon(if (pipMode) IPip else IHead, Modifier.weight(1f)) {
+                        pipMode = !pipMode; store.setPipMode(pipMode)
+                        Toast.makeText(ctx, if (pipMode) "نافذة مصغّرة عند الخروج" else "صوت فقط عند الخروج", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
