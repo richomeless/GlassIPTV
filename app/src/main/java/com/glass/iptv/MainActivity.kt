@@ -10,6 +10,7 @@ import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
+import android.view.LayoutInflater
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -59,8 +60,10 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.graphics.BlurEffect
@@ -117,8 +120,6 @@ class Store(ctx: Context) {
         p.getString("pl", null)?.split("\n")?.filter { it.isNotBlank() }
             ?: listOf("https://iptv-org.github.io/iptv/languages/ara.m3u")
     fun savePlaylists(l: List<String>) = p.edit().putString("pl", l.joinToString("\n")).apply()
-    fun volume(): Float = p.getFloat("vol", 1f)
-    fun setVolume(v: Float) = p.edit().putFloat("vol", v).apply()
     fun pipMode(): Boolean = p.getBoolean("pip", true)
     fun setPipMode(b: Boolean) = p.edit().putBoolean("pip", b).apply()
     fun favs(): List<Channel> = (p.getString("fav", "") ?: "").split("\n").filter { it.isNotBlank() }.map {
@@ -286,44 +287,10 @@ class RevealShape(private val p: Float, private val o: Rect, private val corner:
     }
 }
 
-fun appIconBitmap(ctx: Context): ImageBitmap? = runCatching {
-    val d = ctx.packageManager.getApplicationIcon(ctx.packageName)
-    val bmp = android.graphics.Bitmap.createBitmap(128, 128, android.graphics.Bitmap.Config.ARGB_8888)
-    val cv = android.graphics.Canvas(bmp)
-    d.setBounds(0, 0, 128, 128); d.draw(cv)
-    bmp.asImageBitmap()
-}.getOrNull()
-
-// سلايدر الصوت: عمودي بشكل زجاجي، ايقونة التطبيق فوق، يتحكم بصوت المشغل
-@Composable
-fun VolumeSlider(vol: Float, icon: ImageBitmap?, modifier: Modifier = Modifier, onChange: (Float) -> Unit) {
-    Box(
-        modifier.width(56.dp).height(200.dp).glass(28.dp)
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    val d = awaitFirstDown()
-                    d.consume()
-                    onChange(1f - (d.position.y / size.height).coerceIn(0f, 1f))
-                    while (true) {
-                        val ev = awaitPointerEvent()
-                        val ch = ev.changes.firstOrNull { it.id == d.id } ?: break
-                        if (!ch.pressed) break
-                        onChange(1f - (ch.position.y / size.height).coerceIn(0f, 1f))
-                        ch.consume()
-                    }
-                }
-            }
-    ) {
-        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(vol.coerceIn(0f, 1f))
-            .background(Color(0xFFAFCBFF).copy(0.8f)))
-        if (icon != null) Image(icon, contentDescription = null,
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 10.dp).size(32.dp).clip(RoundedCornerShape(9.dp)))
-    }
-}
-
 @Composable
 fun Video(p: Player, modifier: Modifier = Modifier) = AndroidView(
-    factory = { PlayerView(it).apply { useController = false; player = p } },
+    // TextureView عشان الزوم والتدوير يشتغلون صح
+    factory = { c -> (LayoutInflater.from(c).inflate(R.layout.player_view, null, false) as PlayerView).apply { player = p } },
     update = { it.player = p },
     modifier = modifier.fillMaxSize()
 )
@@ -397,9 +364,10 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     val reveal = remember { Animatable(0f) }
     var origin by remember { mutableStateOf(Rect.Zero) }
     var closing by remember { mutableStateOf(false) }
-    var vol by remember { mutableStateOf(store.volume()) }
-    val appIcon = remember { appIconBitmap(ctx) }
-    LaunchedEffect(player, vol) { player?.volume = vol }
+    // fullP: 0 = بورتريه، 1 = شاشة كاملة (الفيديو يلف 90 درجة عكس عقارب الساعة)
+    val fullP = remember { Animatable(0f) }
+    var vAr by remember { mutableStateOf(0f) }
+    val ctlRot by remember { derivedStateOf { fullP.value > 0.5f } }
     val chipX = remember { mutableStateMapOf<Int, Float>() }
     var dotLeft by remember { mutableStateOf(0f) }
     val uiAlpha by animateFloatAsState(targetValue = if (ui) 1f else 0f, animationSpec = tween(250), label = "ui")
@@ -440,7 +408,10 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                 val c = cur
                 if (c != null) scope.launch { error = msg + "\n" + probe(c) }
             }
-            override fun onVideoSizeChanged(size: VideoSize) { vh = size.height }
+            override fun onVideoSizeChanged(size: VideoSize) {
+                vh = size.height
+                vAr = if (size.height > 0) size.width * size.pixelWidthHeightRatio / size.height else 0f
+            }
             override fun onTracksChanged(tracks: Tracks) {
                 quals = tracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }.flatMap { g ->
                     (0 until g.length).filter { g.isTrackSupported(it) && g.getTrackFormat(it).height > 0 }
@@ -489,23 +460,30 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         qSel = h
     }
 
-    fun setFull(on: Boolean) {
-        full = on
-        act.requestedOrientation =
-            if (on) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    fun bars(show: Boolean) {
         val c = WindowCompat.getInsetsController(act.window, act.window.decorView)
-        if (on) {
+        if (show) c.show(WindowInsetsCompat.Type.systemBars())
+        else {
             c.hide(WindowInsetsCompat.Type.systemBars())
             c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        } else c.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    // شاشة كاملة: الفيديو يلف ويكبر بأنيميشن (تدوير داخل التطبيق، بدون تدوير النظام)
+    fun setFull(on: Boolean) {
+        if (on == full) return
+        full = on
+        bars(!on)
+        scope.launch { fullP.animateTo(if (on) 1f else 0f, tween(480, easing = FastOutSlowInEasing)) }
     }
 
     // الخروج: الفيديو ينكمش راجع لمكان البطاقة، وبعدها نوقف التشغيل
     fun close() {
         if (closing || cur == null) return
         closing = true
-        if (full) setFull(false)
+        if (full) { full = false; bars(true) }
         scope.launch {
+            if (fullP.value != 0f) fullP.snapTo(0f)
             reveal.animateTo(0f, tween(380, easing = FastOutSlowInEasing))
             player?.stop(); cur = null; error = null
             zoom = 1f; panX = 0f; panY = 0f
@@ -533,7 +511,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         }
     }
 
-    BackHandler(cur != null) { close() }
+    BackHandler(cur != null) { if (full) setFull(false) else close() }
 
     if (inPip) {
         Box(Modifier.fillMaxSize().background(Color.Black)) { player?.let { Video(it) } }
@@ -679,12 +657,15 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                             val down = awaitFirstDown()
                             var moved = false
                             var released = false
+                            var fired = false
                             var lastPos = down.position
+                            val thr = 80.dp.toPx()
                             while (true) {
                                 val ev = awaitPointerEvent()
                                 val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
                                 if (!ch.pressed) { released = true; break }
-                                if (!moved && (ch.position - down.position).getDistance() > viewConfiguration.touchSlop) moved = true
+                                val tot = ch.position - down.position
+                                if (!moved && tot.getDistance() > viewConfiguration.touchSlop) moved = true
                                 if (moved && zoom > 1f) {
                                     // تحريك الفيديو بعد الزوم
                                     val d = ch.position - lastPos
@@ -693,6 +674,17 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                                     panX = (panX + d.x).coerceIn(-mx, mx)
                                     panY = (panY + d.y).coerceIn(-my, my)
                                     ch.consume()
+                                } else if (moved && !fired) {
+                                    // سحب للأعلى = شاشة كاملة، سحب للأسفل = رجوع (بحسب اتجاه الصورة)
+                                    val rot = full && size.height > size.width
+                                    val ay = if (rot) tot.x else tot.y
+                                    val ax = if (rot) -tot.y else tot.x
+                                    if (kotlin.math.abs(ay) > thr && kotlin.math.abs(ay) > kotlin.math.abs(ax) * 1.5f) {
+                                        if (ay < 0f && !full) setFull(true)
+                                        else if (ay > 0f && full) setFull(false)
+                                        fired = true
+                                        ch.consume()
+                                    }
                                 }
                                 lastPos = ch.position
                             }
@@ -700,15 +692,16 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                             // ضغطة وحدة: إظهار/إخفاء الأزرار. ضغطتين مع سحب: زوم
                             val second = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) { awaitFirstDown() }
                             if (second == null) { ui = !ui; return@awaitEachGesture }
-                            var lastY = second.position.y
+                            var lastP = second.position
                             while (true) {
                                 val ev = awaitPointerEvent()
                                 val ch = ev.changes.firstOrNull { it.id == second.id } ?: break
                                 if (!ch.pressed) break
-                                val dy = ch.position.y - lastY
-                                lastY = ch.position.y
-                                if (dy != 0f) {
-                                    zoom = (zoom * kotlin.math.exp(dy / 450f)).coerceIn(1f, 4f)
+                                val d = ch.position - lastP
+                                lastP = ch.position
+                                val dyPic = if (full && size.height > size.width) d.x else d.y
+                                if (dyPic != 0f) {
+                                    zoom = (zoom * kotlin.math.exp(dyPic / 450f)).coerceIn(1f, 4f)
                                     val mx = (zoom - 1f) * size.width / 2f
                                     val my = (zoom - 1f) * size.height / 2f
                                     panX = panX.coerceIn(-mx, mx); panY = panY.coerceIn(-my, my)
@@ -720,48 +713,70 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
             ) {
                 player?.let {
                     Video(it, Modifier.graphicsLayer {
-                        scaleX = zoom; scaleY = zoom; translationX = panX; translationY = panY
+                        val fp = fullP.value
+                        val w = size.width; val h = size.height
+                        val portrait = h > w
+                        val ar = if (vAr > 0f) vAr else 16f / 9f
+                        // معامل التكبير عشان الفيديو يملأ الشاشة بعد التدوير
+                        val sFull = if (portrait) kotlin.math.min(h, w * ar) / kotlin.math.min(w, h * ar) else 1f
+                        val k = (1f + (sFull - 1f) * fp) * zoom
+                        scaleX = k; scaleY = k
+                        rotationZ = if (portrait) -90f * fp else 0f
+                        translationX = panX; translationY = panY
                     })
                 }
-                error?.let {
-                    Text(it, color = Color(0xFFFF6B6B), fontSize = 13.sp, textAlign = TextAlign.Center,
-                        modifier = Modifier.align(Alignment.Center).padding(24.dp))
-                }
-                if (uiAlpha > 0.01f) Box(Modifier.fillMaxSize().graphicsLayer {
-                    alpha = uiAlpha * ((reveal.value - 0.6f) / 0.4f).coerceIn(0f, 1f)
+                // الأزرار تتدور مع الفيديو: نعيد ترتيبها بمقاس الشاشة بعد التدوير
+                Box(Modifier.fillMaxSize().layout { m, cs ->
+                    val rot = ctlRot && cs.maxHeight > cs.maxWidth
+                    val w = if (rot) cs.maxHeight else cs.maxWidth
+                    val h = if (rot) cs.maxWidth else cs.maxHeight
+                    val pl = m.measure(Constraints.fixed(w, h))
+                    layout(cs.maxWidth, cs.maxHeight) {
+                        pl.placeWithLayer((cs.maxWidth - w) / 2, (cs.maxHeight - h) / 2) { rotationZ = if (rot) -90f else 0f }
+                    }
                 }) {
-                    Row(
-                        Modifier.align(Alignment.TopStart).fillMaxWidth().statusBarsPadding().padding(12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        GlassIcon(IBack, Modifier.width(64.dp)) { close() }
-                        Text(c.name, color = Color.White, maxLines = 1, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                        GlassIcon(if (isFav) IStarOn else IStarOff, Modifier.width(64.dp), if (isFav) Color(0xFFFFD60A) else Color.White) { toggleFav(c) }
-                    }
-                    VolumeSlider(vol, appIcon, Modifier.align(Alignment.CenterEnd).padding(end = 12.dp)) { v ->
-                        vol = v; store.setVolume(v)
-                    }
-                    Row(
-                        Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        GlassIcon(if (playing) IPause else IPlay, Modifier.weight(1f)) {
-                            player?.let { if (it.isPlaying) it.pause() else it.play() }
+                    Box(Modifier.fillMaxSize()) {
+                        error?.let {
+                            Text(it, color = Color(0xFFFF6B6B), fontSize = 13.sp, textAlign = TextAlign.Center,
+                                modifier = Modifier.align(Alignment.Center).padding(24.dp))
                         }
-                        Box(Modifier.weight(1f)) {
-                            GlassButton(if (qSel != null) "$qSel" else if (vh > 0) "$vh" else "—", Modifier.fillMaxWidth()) { menu = true }
-                            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                DropdownMenuItem(text = { Text("تلقائي") }, onClick = { setQuality(null, null); menu = false })
-                                quals.forEach { (h, o) ->
-                                    DropdownMenuItem(text = { Text("${h}p") }, onClick = { setQuality(o, h); menu = false })
+                        if (uiAlpha > 0.01f) Box(Modifier.fillMaxSize().graphicsLayer {
+                            val fp = fullP.value
+                    val steady = kotlin.math.max((1f - fp * 4f).coerceIn(0f, 1f), ((fp - 0.75f) * 4f).coerceIn(0f, 1f))
+                    alpha = uiAlpha * ((reveal.value - 0.6f) / 0.4f).coerceIn(0f, 1f) * steady
+                        }) {
+                            Row(
+                                Modifier.align(Alignment.TopStart).fillMaxWidth().statusBarsPadding().padding(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                GlassIcon(IBack, Modifier.width(64.dp)) { close() }
+                                Text(c.name, color = Color.White, maxLines = 1, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                GlassIcon(if (isFav) IStarOn else IStarOff, Modifier.width(64.dp), if (isFav) Color(0xFFFFD60A) else Color.White) { toggleFav(c) }
+                            }
+                            Row(
+                                Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                GlassIcon(if (playing) IPause else IPlay, Modifier.weight(1f)) {
+                                    player?.let { if (it.isPlaying) it.pause() else it.play() }
+                                }
+                                Box(Modifier.weight(1f)) {
+                                    GlassButton(if (qSel != null) "$qSel" else if (vh > 0) "$vh" else "—", Modifier.fillMaxWidth()) { menu = true }
+                                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                        DropdownMenuItem(text = { Text("تلقائي") }, onClick = { setQuality(null, null); menu = false })
+                                        quals.forEach { (h, o) ->
+                                            DropdownMenuItem(text = { Text("${h}p") }, onClick = { setQuality(o, h); menu = false })
+                                        }
+                                    }
+                                }
+                                GlassIcon(if (full) IFullExit else IFull, Modifier.weight(1f)) { setFull(!full) }
+                                GlassIcon(if (pipMode) IPip else IHead, Modifier.weight(1f)) {
+                                    pipMode = !pipMode; store.setPipMode(pipMode)
+                                    Toast.makeText(ctx, if (pipMode) "نافذة مصغّرة عند الخروج" else "صوت فقط عند الخروج", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
-                        GlassIcon(if (full) IFullExit else IFull, Modifier.weight(1f)) { setFull(!full) }
-                        GlassIcon(if (pipMode) IPip else IHead, Modifier.weight(1f)) {
-                            pipMode = !pipMode; store.setPipMode(pipMode)
-                            Toast.makeText(ctx, if (pipMode) "نافذة مصغّرة عند الخروج" else "صوت فقط عند الخروج", Toast.LENGTH_SHORT).show()
-                        }
+
                     }
                 }
             }
