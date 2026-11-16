@@ -16,7 +16,15 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.*
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -40,7 +48,21 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.TileMode
@@ -95,6 +117,8 @@ class Store(ctx: Context) {
         p.getString("pl", null)?.split("\n")?.filter { it.isNotBlank() }
             ?: listOf("https://iptv-org.github.io/iptv/languages/ara.m3u")
     fun savePlaylists(l: List<String>) = p.edit().putString("pl", l.joinToString("\n")).apply()
+    fun volume(): Float = p.getFloat("vol", 1f)
+    fun setVolume(v: Float) = p.edit().putFloat("vol", v).apply()
     fun pipMode(): Boolean = p.getBoolean("pip", true)
     fun setPipMode(b: Boolean) = p.edit().putBoolean("pip", b).apply()
     fun favs(): List<Channel> = (p.getString("fav", "") ?: "").split("\n").filter { it.isNotBlank() }.map {
@@ -207,11 +231,11 @@ fun GlassIcon(icon: ImageVector, modifier: Modifier = Modifier, tint: Color = Co
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun Chip(text: String, selected: Boolean, onLong: () -> Unit = {}, onClick: () -> Unit) {
+fun Chip(text: String, selected: Boolean, modifier: Modifier = Modifier, onLong: () -> Unit = {}, onClick: () -> Unit) {
     // نفس الارتفاع ونفس الشكل لكل الأزرار، والتحديد يلوّن الخلفية بس
     val shape = RoundedCornerShape(14.dp)
     Box(
-        Modifier.height(40.dp).glass(14.dp)
+        modifier.height(40.dp).glass(14.dp)
             .background(if (selected) Color.White.copy(0.22f) else Color.Transparent, shape)
             .combinedClickable(onClick = onClick, onLongClick = onLong)
             .padding(horizontal = 16.dp),
@@ -221,10 +245,19 @@ fun Chip(text: String, selected: Boolean, onLong: () -> Unit = {}, onClick: () -
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun Tile(c: Channel, fav: Boolean, onLong: () -> Unit, onClick: () -> Unit) {
+fun Tile(c: Channel, fav: Boolean, onLong: () -> Unit, onClick: (Rect) -> Unit) {
     val ctx = LocalContext.current
-    Column(Modifier.combinedClickable(onClick = onClick, onLongClick = onLong), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.fillMaxWidth().aspectRatio(1f).glass(22.dp, clipContent = false), contentAlignment = Alignment.Center) {
+    // نحفظ مكان البطاقة بدون ما نسبب إعادة رسم، ونستخدمه وقت الضغط لانيميشن الفتح
+    val holder = remember { arrayOfNulls<LayoutCoordinates>(1) }
+    Column(
+        Modifier.combinedClickable(
+            onClick = { onClick(holder[0]?.let { if (it.isAttached) it.boundsInRoot() else Rect.Zero } ?: Rect.Zero) },
+            onLongClick = onLong
+        ),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(Modifier.fillMaxWidth().aspectRatio(1f).onGloballyPositioned { holder[0] = it }.glass(22.dp, clipContent = false),
+            contentAlignment = Alignment.Center) {
             if (c.logo.isEmpty()) Text(c.name.take(1), color = Color.White, fontSize = 28.sp)
             else {
                 // نصغّر الشعار وقت فك الضغط عشان التمرير يبقى سلس
@@ -238,6 +271,53 @@ fun Tile(c: Channel, fav: Boolean, onLong: () -> Unit, onClick: () -> Unit) {
         // سطرين دايماً عشان كل الصفوف بنفس الارتفاع
         Text(c.name, color = Color.White.copy(0.9f), fontSize = 12.sp, maxLines = 2, minLines = 2,
             textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
+private fun mix(a: Float, b: Float, t: Float) = a + (b - a) * t
+
+// شكل القص: مستطيل يكبر من مكان بطاقة القناة لين يملأ الشاشة
+class RevealShape(private val p: Float, private val o: Rect, private val corner: Float) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+        val l = mix(o.left, 0f, p); val t = mix(o.top, 0f, p)
+        val r = mix(o.right, size.width, p); val b = mix(o.bottom, size.height, p)
+        val rad = mix(corner, 0f, p)
+        return Outline.Rounded(RoundRect(l, t, r, b, CornerRadius(rad, rad)))
+    }
+}
+
+fun appIconBitmap(ctx: Context): ImageBitmap? = runCatching {
+    val d = ctx.packageManager.getApplicationIcon(ctx.packageName)
+    val bmp = android.graphics.Bitmap.createBitmap(128, 128, android.graphics.Bitmap.Config.ARGB_8888)
+    val cv = android.graphics.Canvas(bmp)
+    d.setBounds(0, 0, 128, 128); d.draw(cv)
+    bmp.asImageBitmap()
+}.getOrNull()
+
+// سلايدر الصوت: عمودي بشكل زجاجي، ايقونة التطبيق فوق، يتحكم بصوت المشغل
+@Composable
+fun VolumeSlider(vol: Float, icon: ImageBitmap?, modifier: Modifier = Modifier, onChange: (Float) -> Unit) {
+    Box(
+        modifier.width(56.dp).height(200.dp).glass(28.dp)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val d = awaitFirstDown()
+                    d.consume()
+                    onChange(1f - (d.position.y / size.height).coerceIn(0f, 1f))
+                    while (true) {
+                        val ev = awaitPointerEvent()
+                        val ch = ev.changes.firstOrNull { it.id == d.id } ?: break
+                        if (!ch.pressed) break
+                        onChange(1f - (ch.position.y / size.height).coerceIn(0f, 1f))
+                        ch.consume()
+                    }
+                }
+            }
+    ) {
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(vol.coerceIn(0f, 1f))
+            .background(Color(0xFFAFCBFF).copy(0.8f)))
+        if (icon != null) Image(icon, contentDescription = null,
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 10.dp).size(32.dp).clip(RoundedCornerShape(9.dp)))
     }
 }
 
@@ -312,6 +392,16 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     var cur by remember { mutableStateOf<Channel?>(null) }
     var ui by remember { mutableStateOf(true) }
     var zoom by remember { mutableStateOf(1f) }
+    var panX by remember { mutableStateOf(0f) }
+    var panY by remember { mutableStateOf(0f) }
+    val reveal = remember { Animatable(0f) }
+    var origin by remember { mutableStateOf(Rect.Zero) }
+    var closing by remember { mutableStateOf(false) }
+    var vol by remember { mutableStateOf(store.volume()) }
+    val appIcon = remember { appIconBitmap(ctx) }
+    LaunchedEffect(player, vol) { player?.volume = vol }
+    val chipX = remember { mutableStateMapOf<Int, Float>() }
+    var dotLeft by remember { mutableStateOf(0f) }
     val uiAlpha by animateFloatAsState(targetValue = if (ui) 1f else 0f, animationSpec = tween(250), label = "ui")
     var quals by remember { mutableStateOf(listOf<Pair<Int, TrackSelectionOverride>>()) }
     var qSel by remember { mutableStateOf<Int?>(null) }
@@ -370,9 +460,18 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         }
     }
 
-    fun start(c: Channel) {
-        error = null; qSel = null; vh = 0; cur = c; ui = true; zoom = 1f
+    fun start(c: Channel, from: Rect? = null) {
+        if (closing) return
+        error = null; qSel = null; vh = 0; ui = true; zoom = 1f; panX = 0f; panY = 0f
         Hdr.ref = c.ref; Hdr.ua = c.ua
+        val dm = ctx.resources.displayMetrics
+        val cx = dm.widthPixels / 2f; val cy = dm.heightPixels / 2f
+        origin = if (from != null && from.width > 0f) from else Rect(cx - 80f, cy - 80f, cx + 80f, cy + 80f)
+        cur = c
+        scope.launch {
+            reveal.snapTo(0f)
+            reveal.animateTo(1f, tween(480, easing = FastOutSlowInEasing))
+        }
         player?.let { p ->
             val b = MediaItem.Builder().setUri(c.url)
                 .setMediaMetadata(MediaMetadata.Builder().setTitle(c.name).build())
@@ -401,9 +500,17 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         } else c.show(WindowInsetsCompat.Type.systemBars())
     }
 
+    // الخروج: الفيديو ينكمش راجع لمكان البطاقة، وبعدها نوقف التشغيل
     fun close() {
+        if (closing || cur == null) return
+        closing = true
         if (full) setFull(false)
-        player?.stop(); cur = null; error = null; zoom = 1f
+        scope.launch {
+            reveal.animateTo(0f, tween(380, easing = FastOutSlowInEasing))
+            player?.stop(); cur = null; error = null
+            zoom = 1f; panX = 0f; panY = 0f
+            closing = false
+        }
     }
 
     fun toggleFav(c: Channel) {
@@ -433,142 +540,228 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         return
     }
 
-    val c = cur
-    if (c != null) {
-        val isFav = favs.any { it.url == c.url }
-        Box(
-            Modifier.fillMaxSize().background(Color.Black)
-                .pointerInput(Unit) {
-                    awaitEachGesture {
-                        awaitFirstDown()
-                        waitForUpOrCancellation() ?: return@awaitEachGesture
-                        // ضغطة وحدة: إظهار/إخفاء الأزرار. ضغطتين مع سحب: زوم
-                        val second = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) { awaitFirstDown() }
-                        if (second == null) { ui = !ui; return@awaitEachGesture }
-                        var lastY = second.position.y
-                        while (true) {
-                            val ev = awaitPointerEvent()
-                            val ch = ev.changes.firstOrNull() ?: break
-                            if (!ch.pressed) break
-                            val dy = ch.position.y - lastY
-                            lastY = ch.position.y
-                            if (dy != 0f) {
-                                zoom = (zoom * kotlin.math.exp(dy / 450f)).coerceIn(1f, 4f)
-                                ch.consume()
-                            }
-                        }
-                    }
-                }
-        ) {
-            player?.let { Video(it, Modifier.graphicsLayer { scaleX = zoom; scaleY = zoom }) }
-            error?.let {
-                Text(it, color = Color(0xFFFF6B6B), fontSize = 13.sp, textAlign = TextAlign.Center,
-                    modifier = Modifier.align(Alignment.Center).padding(24.dp))
-            }
-            if (uiAlpha > 0.01f) Box(Modifier.fillMaxSize().graphicsLayer { alpha = uiAlpha }) {
-                Row(
-                    Modifier.align(Alignment.TopStart).fillMaxWidth().statusBarsPadding().padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically
-                ) {
-                    GlassIcon(IBack, Modifier.width(64.dp)) { close() }
-                    Text(c.name, color = Color.White, maxLines = 1, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                    GlassIcon(if (isFav) IStarOn else IStarOff, Modifier.width(64.dp), if (isFav) Color(0xFFFFD60A) else Color.White) { toggleFav(c) }
-                }
-                Row(
-                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    GlassIcon(if (playing) IPause else IPlay, Modifier.weight(1f)) {
-                        player?.let { if (it.isPlaying) it.pause() else it.play() }
-                    }
-                    Box(Modifier.weight(1f)) {
-                        GlassButton(if (qSel != null) "$qSel" else if (vh > 0) "$vh" else "—", Modifier.fillMaxWidth()) { menu = true }
-                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                            DropdownMenuItem(text = { Text("تلقائي") }, onClick = { setQuality(null, null); menu = false })
-                            quals.forEach { (h, o) ->
-                                DropdownMenuItem(text = { Text("${h}p") }, onClick = { setQuality(o, h); menu = false })
-                            }
-                        }
-                    }
-                    GlassIcon(if (full) IFullExit else IFull, Modifier.weight(1f)) { setFull(!full) }
-                    GlassIcon(if (pipMode) IPip else IHead, Modifier.weight(1f)) {
-                        pipMode = !pipMode; store.setPipMode(pipMode)
-                        Toast.makeText(ctx, if (pipMode) "نافذة مصغّرة عند الخروج" else "صوت فقط عند الخروج", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-        }
-        return
-    }
-
     val favUrls = remember(favs) { favs.map { it.url }.toHashSet() }
     val hh = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 112.dp
     val layer = rememberGraphicsLayer()
     val frost = remember { if (Build.VERSION.SDK_INT >= 31) frostEffect(110f) else null }
     var menuMore by remember { mutableStateOf(false) }
+    val sh = rememberInfiniteTransition(label = "sh")
+    val shT by sh.animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(keyframes<Float> {
+            durationMillis = 4200
+            0f at 0 using LinearEasing
+            1f at 2000 using LinearEasing
+            1f at 4200
+        }),
+        label = "shT"
+    )
+    val mainVisible by remember { derivedStateOf { cur == null || reveal.value < 0.995f } }
+    val c = cur
 
-    Box(Modifier.fillMaxSize().background(Color(0xFF040508))) {
-        // الخلفية والقنوات كلها تتسجل في طبقة وحدة، وتنرسم تحت الهيدر فقط
-        Box(Modifier.fillMaxSize().drawWithContent {
-            layer.record { this@drawWithContent.drawContent() }
-            clipRect(top = hh.toPx()) { drawLayer(layer) }
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        if (mainVisible) Box(Modifier.fillMaxSize().graphicsLayer {
+            // الواجهة الرئيسية تصغر وتخفت شوي وقت ما الفيديو يفتح فوقها
+            val p = reveal.value.coerceIn(0f, 1f)
+            val k = 1f - 0.07f * p
+            scaleX = k; scaleY = k; alpha = 1f - 0.6f * p
         }) {
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF040508), Color(0xFF0C0E18)))))
-            Box(Modifier.fillMaxSize().drawBehind {
-                drawRect(Brush.radialGradient(listOf(Color(0x664B3AA8), Color.Transparent), Offset(size.width * 0.1f, size.height * 0.05f), size.width * 0.9f))
-                drawRect(Brush.radialGradient(listOf(Color(0x550A6C94), Color.Transparent), Offset(size.width * 0.95f, size.height * 0.95f), size.width * 0.9f))
-            })
-            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
-                val isFavPage = page == 1
-                Box(Modifier.fillMaxSize()) {
-                    LazyVerticalGrid(
-                        state = if (isFavPage) favState else gridState,
-                        columns = GridCells.Adaptive(96.dp),
-                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = hh + 8.dp, bottom = 48.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(if (isFavPage) favs else channels, contentType = { "tile" }) { ch ->
-                            Tile(ch, ch.url in favUrls, onLong = { toggleFav(ch) }) { start(ch) }
+            Box(Modifier.fillMaxSize().background(Color(0xFF040508))) {
+                // الخلفية والقنوات كلها تتسجل في طبقة وحدة، وتنرسم تحت الهيدر فقط
+                Box(Modifier.fillMaxSize().drawWithContent {
+                    layer.record { this@drawWithContent.drawContent() }
+                    clipRect(top = hh.toPx()) { drawLayer(layer) }
+                }) {
+                    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF040508), Color(0xFF0C0E18)))))
+                    Box(Modifier.fillMaxSize().drawBehind {
+                        drawRect(Brush.radialGradient(listOf(Color(0x664B3AA8), Color.Transparent), Offset(size.width * 0.1f, size.height * 0.05f), size.width * 0.9f))
+                        drawRect(Brush.radialGradient(listOf(Color(0x550A6C94), Color.Transparent), Offset(size.width * 0.95f, size.height * 0.95f), size.width * 0.9f))
+                    })
+                    HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
+                        val isFavPage = page == 1
+                        Box(Modifier.fillMaxSize()) {
+                            LazyVerticalGrid(
+                                state = if (isFavPage) favState else gridState,
+                                columns = GridCells.Adaptive(96.dp),
+                                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = hh + 8.dp, bottom = 48.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(14.dp),
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                items(if (isFavPage) favs else channels, contentType = { "tile" }) { ch ->
+                                    Tile(ch, ch.url in favUrls, onLong = { toggleFav(ch) }) { r -> start(ch, r) }
+                                }
+                            }
+                            if (isFavPage && favs.isEmpty()) Text("اضغط مطولاً على أي قناة لإضافتها للمفضلة", color = Color.White.copy(0.6f),
+                                textAlign = TextAlign.Center, modifier = Modifier.align(Alignment.Center).padding(32.dp))
+                            else if (!isFavPage && loading) Text("جاري التحميل...", color = Color.White.copy(0.7f),
+                                modifier = Modifier.align(Alignment.Center))
                         }
                     }
-                    if (isFavPage && favs.isEmpty()) Text("اضغط مطولاً على أي قناة لإضافتها للمفضلة", color = Color.White.copy(0.6f),
-                        textAlign = TextAlign.Center, modifier = Modifier.align(Alignment.Center).padding(32.dp))
-                    else if (!isFavPage && loading) Text("جاري التحميل...", color = Color.White.copy(0.7f),
-                        modifier = Modifier.align(Alignment.Center))
+                }
+                // الهيدر: زجاج مضبب حقيقي، نفس الطبقة لكن مموهة بقوة
+                Box(Modifier.align(Alignment.TopStart).fillMaxWidth().height(hh)) {
+                    Box(Modifier.fillMaxSize()
+                        .graphicsLayer { renderEffect = frost; clip = true }
+                        .drawBehind { drawLayer(layer) })
+                    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.White.copy(0.20f), Color.White.copy(0.07f)))))
+                    // حافة الهيدر السفلية مع لمعة تمر من اليسار لليمين
+                    Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(2.dp).drawBehind {
+                        drawRect(Brush.horizontalGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.12f), Color.White.copy(0.45f))))
+                        val bw = size.width * 0.4f
+                        val x = -bw + (size.width + bw * 2f) * shT
+                        drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Color.White, Color.Transparent), startX = x, endX = x + bw))
+                    })
+                    Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Glass IPTV", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f).padding(vertical = 10.dp))
+                            Box {
+                                Box(Modifier.size(40.dp).glass(14.dp).clickable { menuMore = true }, contentAlignment = Alignment.Center) {
+                                    Icon(IMore, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                                }
+                                DropdownMenu(expanded = menuMore, onDismissRequest = { menuMore = false }) {
+                                    DropdownMenuItem(text = { Text("إضافة رابط") }, onClick = { menuMore = false; showAdd = true })
+                                }
+                            }
+                        }
+                        LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
+                            item {
+                                Chip("★ المفضلة", tab == -1, Modifier.onGloballyPositioned { chipX[-1] = it.positionInRoot().x + it.size.width / 2f }) { tab = -1 }
+                            }
+                            itemsIndexed(lists) { i, u ->
+                                Chip(u.substringAfterLast('/').substringBefore('?').removeSuffix(".m3u").ifEmpty { "قائمة" }.take(16), tab == i,
+                                    Modifier.onGloballyPositioned { chipX[i] = it.positionInRoot().x + it.size.width / 2f }, onLong = {
+                                    lists = lists.filterIndexed { j, _ -> j != i }
+                                    store.savePlaylists(lists)
+                                    tab = if (lists.isEmpty()) -1 else 0
+                                }) { tab = i }
+                            }
+                        }
+                        // النقطة الديناميكية: تتبع السحب بين الصفحتين وتتمدد وهي تتحرك
+                        val pageP = (pager.currentPage + pager.currentPageOffsetFraction).coerceIn(0f, 1f)
+                        val mainX by animateFloatAsState(
+                            targetValue = chipX[mainTab] ?: 0f,
+                            animationSpec = spring(dampingRatio = 0.65f, stiffness = 260f), label = "mx"
+                        )
+                        Box(Modifier.fillMaxWidth().height(12.dp)
+                            .onGloballyPositioned { dotLeft = it.positionInRoot().x }
+                            .drawBehind {
+                                val favX = chipX[-1] ?: 0f
+                                val x = mix(mainX, favX, pageP) - dotLeft
+                                val moving = kotlin.math.sin(Math.PI.toFloat() * pageP)
+                                val extra = kotlin.math.abs((chipX[mainTab] ?: 0f) - mainX).coerceAtMost(160f)
+                                val w = 16.dp.toPx() + moving * 36.dp.toPx() + extra * 0.4f
+                                val h = 5.dp.toPx()
+                                drawRoundRect(Color.White.copy(0.28f), Offset(x - w / 2f - 3.dp.toPx(), 1.dp.toPx()),
+                                    Size(w + 6.dp.toPx(), h + 4.dp.toPx()), CornerRadius(h))
+                                drawRoundRect(Color.White.copy(0.95f), Offset(x - w / 2f, 3.dp.toPx()), Size(w, h), CornerRadius(h / 2f))
+                            })
+                    }
                 }
             }
         }
-        // الهيدر: زجاج مضبب حقيقي، نفس الطبقة لكن مموهة بقوة
-        Box(Modifier.align(Alignment.TopStart).fillMaxWidth().height(hh)) {
-            Box(Modifier.fillMaxSize()
-                .graphicsLayer { renderEffect = frost; clip = true }
-                .drawBehind { drawLayer(layer) })
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.White.copy(0.20f), Color.White.copy(0.07f)))))
-            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(1.dp)
-                .background(Brush.horizontalGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.12f), Color.White.copy(0.45f)))))
-            Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Glass IPTV", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f).padding(vertical = 10.dp))
-                    Box {
-                        Box(Modifier.size(40.dp).glass(14.dp).clickable { menuMore = true }, contentAlignment = Alignment.Center) {
-                            Icon(IMore, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
-                        }
-                        DropdownMenu(expanded = menuMore, onDismissRequest = { menuMore = false }) {
-                            DropdownMenuItem(text = { Text("إضافة رابط") }, onClick = { menuMore = false; showAdd = true })
+
+        if (c != null) {
+            val isFav = favs.any { it.url == c.url }
+            Box(
+                Modifier.fillMaxSize()
+                    .graphicsLayer {
+                        // الفيديو يتوسع من مكان البطاقة لين يملأ الشاشة
+                        val p = reveal.value.coerceIn(0f, 1f)
+                        shape = RevealShape(p, origin, 22.dp.toPx())
+                        clip = true
+                        alpha = (p * 4f).coerceIn(0f, 1f)
+                    }
+                    .background(Color.Black)
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown()
+                            var moved = false
+                            var released = false
+                            var lastPos = down.position
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!ch.pressed) { released = true; break }
+                                if (!moved && (ch.position - down.position).getDistance() > viewConfiguration.touchSlop) moved = true
+                                if (moved && zoom > 1f) {
+                                    // تحريك الفيديو بعد الزوم
+                                    val d = ch.position - lastPos
+                                    val mx = (zoom - 1f) * size.width / 2f
+                                    val my = (zoom - 1f) * size.height / 2f
+                                    panX = (panX + d.x).coerceIn(-mx, mx)
+                                    panY = (panY + d.y).coerceIn(-my, my)
+                                    ch.consume()
+                                }
+                                lastPos = ch.position
+                            }
+                            if (!released || moved) return@awaitEachGesture
+                            // ضغطة وحدة: إظهار/إخفاء الأزرار. ضغطتين مع سحب: زوم
+                            val second = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) { awaitFirstDown() }
+                            if (second == null) { ui = !ui; return@awaitEachGesture }
+                            var lastY = second.position.y
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                val ch = ev.changes.firstOrNull { it.id == second.id } ?: break
+                                if (!ch.pressed) break
+                                val dy = ch.position.y - lastY
+                                lastY = ch.position.y
+                                if (dy != 0f) {
+                                    zoom = (zoom * kotlin.math.exp(dy / 450f)).coerceIn(1f, 4f)
+                                    val mx = (zoom - 1f) * size.width / 2f
+                                    val my = (zoom - 1f) * size.height / 2f
+                                    panX = panX.coerceIn(-mx, mx); panY = panY.coerceIn(-my, my)
+                                    ch.consume()
+                                }
+                            }
                         }
                     }
+            ) {
+                player?.let {
+                    Video(it, Modifier.graphicsLayer {
+                        scaleX = zoom; scaleY = zoom; translationX = panX; translationY = panY
+                    })
                 }
-                LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
-                    item { Chip("★ المفضلة", tab == -1) { tab = -1 } }
-                    itemsIndexed(lists) { i, u ->
-                        Chip(u.substringAfterLast('/').substringBefore('?').removeSuffix(".m3u").ifEmpty { "قائمة" }.take(16), tab == i, onLong = {
-                            lists = lists.filterIndexed { j, _ -> j != i }
-                            store.savePlaylists(lists)
-                            tab = if (lists.isEmpty()) -1 else 0
-                        }) { tab = i }
+                error?.let {
+                    Text(it, color = Color(0xFFFF6B6B), fontSize = 13.sp, textAlign = TextAlign.Center,
+                        modifier = Modifier.align(Alignment.Center).padding(24.dp))
+                }
+                if (uiAlpha > 0.01f) Box(Modifier.fillMaxSize().graphicsLayer {
+                    alpha = uiAlpha * ((reveal.value - 0.6f) / 0.4f).coerceIn(0f, 1f)
+                }) {
+                    Row(
+                        Modifier.align(Alignment.TopStart).fillMaxWidth().statusBarsPadding().padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        GlassIcon(IBack, Modifier.width(64.dp)) { close() }
+                        Text(c.name, color = Color.White, maxLines = 1, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        GlassIcon(if (isFav) IStarOn else IStarOff, Modifier.width(64.dp), if (isFav) Color(0xFFFFD60A) else Color.White) { toggleFav(c) }
+                    }
+                    VolumeSlider(vol, appIcon, Modifier.align(Alignment.CenterEnd).padding(end = 12.dp)) { v ->
+                        vol = v; store.setVolume(v)
+                    }
+                    Row(
+                        Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        GlassIcon(if (playing) IPause else IPlay, Modifier.weight(1f)) {
+                            player?.let { if (it.isPlaying) it.pause() else it.play() }
+                        }
+                        Box(Modifier.weight(1f)) {
+                            GlassButton(if (qSel != null) "$qSel" else if (vh > 0) "$vh" else "—", Modifier.fillMaxWidth()) { menu = true }
+                            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                DropdownMenuItem(text = { Text("تلقائي") }, onClick = { setQuality(null, null); menu = false })
+                                quals.forEach { (h, o) ->
+                                    DropdownMenuItem(text = { Text("${h}p") }, onClick = { setQuality(o, h); menu = false })
+                                }
+                            }
+                        }
+                        GlassIcon(if (full) IFullExit else IFull, Modifier.weight(1f)) { setFull(!full) }
+                        GlassIcon(if (pipMode) IPip else IHead, Modifier.weight(1f)) {
+                            pipMode = !pipMode; store.setPipMode(pipMode)
+                            Toast.makeText(ctx, if (pipMode) "نافذة مصغّرة عند الخروج" else "صوت فقط عند الخروج", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
             }
