@@ -109,6 +109,8 @@ import coil.request.ImageRequest
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
@@ -374,13 +376,26 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     val ctlRot by remember { derivedStateOf { fpNow() > 0.5f } }
     val chipX = remember { mutableStateMapOf<Int, Float>() }
     var dotLeft by remember { mutableStateOf(0f) }
-    val uiAlpha by animateFloatAsState(targetValue = if (ui) 1f else 0f, animationSpec = tween(250), label = "ui")
+    val uiAlpha by animateFloatAsState(
+        targetValue = if (ui) 1f else 0f,
+        animationSpec = tween(durationMillis = if (ui) 280 else 650, easing = FastOutSlowInEasing),
+        label = "ui"
+    )
     var quals by remember { mutableStateOf(listOf<Pair<Int, TrackSelectionOverride>>()) }
     var qSel by remember { mutableStateOf<Int?>(null) }
     var vh by remember { mutableStateOf(0) }
     var pipMode by remember { mutableStateOf(store.pipMode()) }
     var menu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    // الأزرار تختفي تلقائياً بعد 3 ثواني من ظهورها (يتجدد العد عند أي لمسة على الأزرار)
+    var uiTick by remember { mutableStateOf(0) }
+    LaunchedEffect(cur, ui, menu, uiTick) {
+        if (cur != null && ui && !menu) {
+            snapshotFlow { reveal.value }.first { it >= 0.99f }
+            delay(3000)
+            ui = false
+        }
+    }
     // حالة الشبكة هنا فوق عشان ترجع لنفس المكان بعد الخروج من القناة
     val gridState = rememberLazyGridState()
     val favState = rememberLazyGridState()
@@ -776,18 +791,21 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                     alpha = uiAlpha * ((reveal.value - 0.6f) / 0.4f).coerceIn(0f, 1f) * steady
                         }) {
                             Row(
-                                Modifier.align(Alignment.TopStart).fillMaxWidth().statusBarsPadding().padding(12.dp),
+                                Modifier.align(Alignment.TopStart).graphicsLayer { translationY = -(1f - uiAlpha) * 28.dp.toPx() }
+                                    .fillMaxWidth().statusBarsPadding().padding(12.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically
                             ) {
                                 GlassIcon(IBack, Modifier.width(64.dp)) { close() }
                                 Text(c.name, color = Color.White, maxLines = 1, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                                GlassIcon(if (isFav) IStarOn else IStarOff, Modifier.width(64.dp), if (isFav) Color(0xFFFFD60A) else Color.White) { toggleFav(c) }
+                                GlassIcon(if (isFav) IStarOn else IStarOff, Modifier.width(64.dp), if (isFav) Color(0xFFFFD60A) else Color.White) { uiTick++; toggleFav(c) }
                             }
                             Row(
-                                Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(12.dp),
+                                Modifier.align(Alignment.BottomCenter).graphicsLayer { translationY = (1f - uiAlpha) * 28.dp.toPx() }
+                                    .fillMaxWidth().navigationBarsPadding().padding(12.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 GlassIcon(if (playing) IPause else IPlay, Modifier.weight(1f)) {
+                                    uiTick++
                                     player?.let { if (it.isPlaying) it.pause() else it.play() }
                                 }
                                 Box(Modifier.weight(1f)) {
@@ -799,9 +817,9 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                                         }
                                     }
                                 }
-                                GlassIcon(if (full) IFullExit else IFull, Modifier.weight(1f)) { setFull(!full) }
+                                GlassIcon(if (full) IFullExit else IFull, Modifier.weight(1f)) { uiTick++; setFull(!full) }
                                 GlassIcon(if (pipMode) IPip else IHead, Modifier.weight(1f)) {
-                                    pipMode = !pipMode; store.setPipMode(pipMode)
+                                    uiTick++; pipMode = !pipMode; store.setPipMode(pipMode)
                                     Toast.makeText(ctx, if (pipMode) "نافذة مصغّرة عند الخروج" else "صوت فقط عند الخروج", Toast.LENGTH_SHORT).show()
                                 }
                             }
