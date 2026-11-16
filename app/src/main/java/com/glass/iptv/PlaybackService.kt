@@ -95,7 +95,8 @@ class PlaybackService : MediaSessionService() {
         val fixed = DataSource.Factory { FixDs(ds.createDataSource()) }
         val player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(fixed))
-            .setAudioAttributes(AudioAttributes.DEFAULT, true)
+            // false = ما نعتمد على الـ audio focus، عشان MixedAudio ما يوقف التشغيل
+            .setAudioAttributes(AudioAttributes.DEFAULT, false)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
