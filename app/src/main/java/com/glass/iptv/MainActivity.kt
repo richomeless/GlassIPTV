@@ -73,6 +73,8 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.Color
@@ -366,8 +368,10 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     var closing by remember { mutableStateOf(false) }
     // fullP: 0 = بورتريه، 1 = شاشة كاملة (الفيديو يلف 90 درجة عكس عقارب الساعة)
     val fullP = remember { Animatable(0f) }
+    var fpDrag by remember { mutableStateOf(-1f) }   // أثناء السحب بالإصبع: تقدم الشاشة الكاملة الحي
+    fun fpNow() = if (fpDrag >= 0f) fpDrag else fullP.value
     var vAr by remember { mutableStateOf(0f) }
-    val ctlRot by remember { derivedStateOf { fullP.value > 0.5f } }
+    val ctlRot by remember { derivedStateOf { fpNow() > 0.5f } }
     val chipX = remember { mutableStateMapOf<Int, Float>() }
     var dotLeft by remember { mutableStateOf(0f) }
     val uiAlpha by animateFloatAsState(targetValue = if (ui) 1f else 0f, animationSpec = tween(250), label = "ui")
@@ -655,17 +659,30 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                     .pointerInput(Unit) {
                         awaitEachGesture {
                             val down = awaitFirstDown()
+                            val vt = VelocityTracker()
+                            vt.addPointerInputChange(down)
                             var moved = false
                             var released = false
-                            var fired = false
+                            var mode = 0            // 0 لا شي، 1 دخول شاشة كاملة، 2 خروج منها
                             var lastPos = down.position
-                            val thr = 80.dp.toPx()
+                            val dist = 280.dp.toPx()
+                            var prog = if (full) 1f else 0f
                             while (true) {
                                 val ev = awaitPointerEvent()
                                 val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                                vt.addPointerInputChange(ch)
                                 if (!ch.pressed) { released = true; break }
                                 val tot = ch.position - down.position
-                                if (!moved && tot.getDistance() > viewConfiguration.touchSlop) moved = true
+                                // اتجاهات الصورة: بعد التدوير مع عقارب الساعة، فوق الصورة = يمين الجهاز
+                                val rot = full && size.height > size.width
+                                val ay = if (rot) -tot.x else tot.y
+                                val ax = if (rot) tot.y else tot.x
+                                if (!moved && tot.getDistance() > viewConfiguration.touchSlop) {
+                                    moved = true
+                                    if (zoom <= 1f && kotlin.math.abs(ay) > kotlin.math.abs(ax)) {
+                                        if (!full && ay < 0f) mode = 1 else if (full && ay > 0f) mode = 2
+                                    }
+                                }
                                 if (moved && zoom > 1f) {
                                     // تحريك الفيديو بعد الزوم
                                     val d = ch.position - lastPos
@@ -674,19 +691,32 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                                     panX = (panX + d.x).coerceIn(-mx, mx)
                                     panY = (panY + d.y).coerceIn(-my, my)
                                     ch.consume()
-                                } else if (moved && !fired) {
-                                    // سحب للأعلى = شاشة كاملة، سحب للأسفل = رجوع (بحسب اتجاه الصورة)
-                                    val rot = full && size.height > size.width
-                                    val ay = if (rot) tot.x else tot.y
-                                    val ax = if (rot) -tot.y else tot.x
-                                    if (kotlin.math.abs(ay) > thr && kotlin.math.abs(ay) > kotlin.math.abs(ax) * 1.5f) {
-                                        if (ay < 0f && !full) setFull(true)
-                                        else if (ay > 0f && full) setFull(false)
-                                        fired = true
-                                        ch.consume()
-                                    }
+                                } else if (mode != 0) {
+                                    // الفيديو يتحرك مع الإصبع حي
+                                    prog = if (mode == 1) (-ay / dist).coerceIn(0f, 1f) else 1f - (ay / dist).coerceIn(0f, 1f)
+                                    fpDrag = prog
+                                    ch.consume()
                                 }
                                 lastPos = ch.position
+                            }
+                            if (mode != 0) {
+                                // عند الإفلات: نكمل للنهاية أو نرجع حسب المسافة والسرعة
+                                val v = vt.calculateVelocity()
+                                val rot = full && size.height > size.width
+                                val vy = if (rot) -v.x else v.y
+                                val target = when {
+                                    vy < -1200f -> 1f
+                                    vy > 1200f -> 0f
+                                    else -> if (prog > 0.5f) 1f else 0f
+                                }
+                                full = target == 1f
+                                bars(target == 0f)
+                                val p0 = prog
+                                scope.launch {
+                                    fullP.snapTo(p0); fpDrag = -1f
+                                    fullP.animateTo(target, tween(320, easing = FastOutSlowInEasing))
+                                }
+                                return@awaitEachGesture
                             }
                             if (!released || moved) return@awaitEachGesture
                             // ضغطة وحدة: إظهار/إخفاء الأزرار. ضغطتين مع سحب: زوم
@@ -699,7 +729,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                                 if (!ch.pressed) break
                                 val d = ch.position - lastP
                                 lastP = ch.position
-                                val dyPic = if (full && size.height > size.width) d.x else d.y
+                                val dyPic = if (full && size.height > size.width) -d.x else d.y
                                 if (dyPic != 0f) {
                                     zoom = (zoom * kotlin.math.exp(dyPic / 450f)).coerceIn(1f, 4f)
                                     val mx = (zoom - 1f) * size.width / 2f
@@ -713,7 +743,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
             ) {
                 player?.let {
                     Video(it, Modifier.graphicsLayer {
-                        val fp = fullP.value
+                        val fp = fpNow()
                         val w = size.width; val h = size.height
                         val portrait = h > w
                         val ar = if (vAr > 0f) vAr else 16f / 9f
@@ -721,7 +751,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         val sFull = if (portrait) kotlin.math.min(h, w * ar) / kotlin.math.min(w, h * ar) else 1f
                         val k = (1f + (sFull - 1f) * fp) * zoom
                         scaleX = k; scaleY = k
-                        rotationZ = if (portrait) -90f * fp else 0f
+                        rotationZ = if (portrait) 90f * fp else 0f
                         translationX = panX; translationY = panY
                     })
                 }
@@ -732,7 +762,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                     val h = if (rot) cs.maxWidth else cs.maxHeight
                     val pl = m.measure(Constraints.fixed(w, h))
                     layout(cs.maxWidth, cs.maxHeight) {
-                        pl.placeWithLayer((cs.maxWidth - w) / 2, (cs.maxHeight - h) / 2) { rotationZ = if (rot) -90f else 0f }
+                        pl.placeWithLayer((cs.maxWidth - w) / 2, (cs.maxHeight - h) / 2) { rotationZ = if (rot) 90f else 0f }
                     }
                 }) {
                     Box(Modifier.fillMaxSize()) {
@@ -741,7 +771,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                                 modifier = Modifier.align(Alignment.Center).padding(24.dp))
                         }
                         if (uiAlpha > 0.01f) Box(Modifier.fillMaxSize().graphicsLayer {
-                            val fp = fullP.value
+                            val fp = fpNow()
                     val steady = kotlin.math.max((1f - fp * 4f).coerceIn(0f, 1f), ((fp - 0.75f) * 4f).coerceIn(0f, 1f))
                     alpha = uiAlpha * ((reveal.value - 0.6f) / 0.4f).coerceIn(0f, 1f) * steady
                         }) {
