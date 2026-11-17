@@ -73,7 +73,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
@@ -129,6 +131,9 @@ class Store(ctx: Context) {
         p.getString("pl", null)?.split("\n")?.filter { it.isNotBlank() }
             ?: listOf("https://iptv-org.github.io/iptv/languages/ara.m3u")
     fun savePlaylists(l: List<String>) = p.edit().putString("pl", l.joinToString("\n")).apply()
+    fun names(): Map<String, String> = (p.getString("pn", "") ?: "").split("\n").filter { it.contains("\t") }
+        .associate { val i = it.indexOf('\t'); it.substring(0, i) to it.substring(i + 1) }
+    fun saveNames(m: Map<String, String>) = p.edit().putString("pn", m.entries.joinToString("\n") { "${it.key}\t${it.value}" }).apply()
     fun pipMode(): Boolean = p.getBoolean("pip", true)
     fun setPipMode(b: Boolean) = p.edit().putBoolean("pip", b).apply()
     fun favs(): List<Channel> = (p.getString("fav", "") ?: "").split("\n").filter { it.isNotBlank() }.map {
@@ -298,6 +303,17 @@ fun Tile(c: Channel, fav: Boolean, onLong: () -> Unit, onClick: (Rect) -> Unit) 
 
 private fun mix(a: Float, b: Float, t: Float) = a + (b - a) * t
 
+// نجمة رباعية الرؤوس بجوانب مقعّرة
+private fun starPath(c: Offset, R: Float, r: Float): Path = Path().apply {
+    val k = 0.12f
+    moveTo(c.x, c.y - r)
+    quadraticBezierTo(c.x + k * R, c.y - k * r, c.x + R, c.y)
+    quadraticBezierTo(c.x + k * R, c.y + k * r, c.x, c.y + r)
+    quadraticBezierTo(c.x - k * R, c.y + k * r, c.x - R, c.y)
+    quadraticBezierTo(c.x - k * R, c.y - k * r, c.x, c.y - r)
+    close()
+}
+
 // شكل القص: مستطيل يكبر من مكان بطاقة القناة لين يملأ الشاشة
 class RevealShape(private val p: Float, private val o: Rect, private val corner: Float) : Shape {
     override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
@@ -423,7 +439,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     // حالة الشبكة هنا فوق عشان ترجع لنفس المكان بعد الخروج من القناة
     val gridState = rememberLazyGridState()
     val favState = rememberLazyGridState()
-    val pager = rememberPagerState(pageCount = { 2 })
+    val pager = rememberPagerState(initialPage = 1, pageCount = { 2 })
     var mainTab by remember { mutableStateOf(0) }
     var lastMainTab by remember { mutableStateOf(0) }
     // الصفحة 0 = القائمة الرئيسية، الصفحة 1 = المفضلة، والسحب بينهم حي
@@ -432,14 +448,14 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
             mainTab = tab
             if (tab != lastMainTab) { lastMainTab = tab; gridState.scrollToItem(0) }
         }
-        val target = if (tab == -1) 1 else 0
+        val target = if (tab == -1) 0 else 1
         if (pager.currentPage != target) pager.animateScrollToPage(target)
     }
     fun pageProg() = (pager.currentPage + pager.currentPageOffsetFraction).coerceIn(0f, 1f)
     LaunchedEffect(pager) {
         snapshotFlow { pager.settledPage }.collect { pg ->
-            if (pg == 1 && tab != -1) tab = -1
-            else if (pg == 0 && tab == -1) tab = mainTab
+            if (pg == 0 && tab != -1) tab = -1
+            else if (pg == 1 && tab == -1) tab = mainTab
         }
     }
 
@@ -516,24 +532,11 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         }
     }
 
-    // يكمّل أنيميشن الشاشة الكاملة: دخول (وبعد ثانية نقلب واجهة النظام فعلياً)، أو خروج
+    // يكمّل أنيميشن الشاشة الكاملة (تدوير الفيديو فقط، بدون تدوير النظام)
     fun settleFull(p0: Float, target: Float) {
         scope.launch {
             fullP.snapTo(p0); fpDrag = -1f
-            if (target >= 1f) {
-                fullP.animateTo(1f, tween(320, easing = FastOutSlowInEasing))
-                delay(1000)
-                if (full) act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-            } else {
-                if (!winPortraitNow) {
-                    // النظام أفقي فعلياً: نرجّعه بورتريه ثم الفيديو ينكمش بالأنيميشن
-                    fullP.snapTo(1f)
-                    act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                    withTimeoutOrNull(2000) { snapshotFlow { winPortraitNow }.first { it } }
-                }
-                fullP.animateTo(0f, tween(380, easing = FastOutSlowInEasing))
-                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            }
+            fullP.animateTo(target, tween(if (target >= 1f) 320 else 380, easing = FastOutSlowInEasing))
         }
     }
 
@@ -548,14 +551,13 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     fun close() {
         if (closing || cur == null) return
         closing = true
-        if (full) { full = false; bars(true); act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
+        if (full) { full = false; bars(true) }
         scope.launch {
             if (fullP.value != 0f) fullP.snapTo(0f)
             reveal.animateTo(0f, tween(380, easing = FastOutSlowInEasing))
             player?.stop(); cur = null; error = null
             zoom = 1f; panX = 0f; panY = 0f
             closing = false
-            act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
 
@@ -591,6 +593,10 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     val layer = rememberGraphicsLayer()
     val frost = remember { if (Build.VERSION.SDK_INT >= 31) frostEffect(110f) else null }
     var menuMore by remember { mutableStateOf(false) }
+    var names by remember { mutableStateOf(store.names()) }
+    var menuFor by remember { mutableStateOf(-1) }
+    var renameIdx by remember { mutableStateOf(-1) }
+    var renameText by remember { mutableStateOf("") }
     // لمعة الهيدر: حلقة إطارات تشتغل فقط وأنت في الواجهة الرئيسية
     var shT by remember { mutableStateOf(0f) }
     LaunchedEffect(cur == null) {
@@ -625,7 +631,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         drawRect(Brush.radialGradient(listOf(Color(0x550A6C94), Color.Transparent), Offset(size.width * 0.95f, size.height * 0.95f), size.width * 0.9f))
                     })
                     HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
-                        val isFavPage = page == 1
+                        val isFavPage = page == 0
                         Box(Modifier.fillMaxSize()) {
                             LazyVerticalGrid(
                                 state = if (isFavPage) favState else gridState,
@@ -652,25 +658,39 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         .graphicsLayer { renderEffect = frost; clip = true }
                         .drawBehind { drawLayer(layer) })
                     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.White.copy(0.20f), Color.White.copy(0.07f)))))
-                    // حافة الهيدر السفلية: لمعة بطيئة تمر من اليسار لليمين مع توهج ناعم حولها
+                    // حافة الهيدر السفلية: رأس نجمة متوهجة متغيرة الألوان وذيل يتلاشى بتوهج خفيف
                     Box(Modifier.align(Alignment.BottomCenter).offset(y = 30.dp).fillMaxWidth().height(60.dp).drawBehind {
                         val yb = size.height / 2f
-                        val bw = size.width * 0.4f
-                        val x = -bw + (size.width + bw * 2f) * shT
-                        val cx = x + bw / 2f
-                        val c0 = Offset(cx, yb)
-                        scale(scaleX = 8f, scaleY = 1f, pivot = c0) {
-                            drawCircle(Brush.radialGradient(listOf(Color(0x30AFC4FF), Color.Transparent), center = c0, radius = 24.dp.toPx()),
-                                radius = 24.dp.toPx(), center = c0)
-                        }
-                        scale(scaleX = 4f, scaleY = 1f, pivot = c0) {
-                            drawCircle(Brush.radialGradient(listOf(Color(0x80FFFFFF), Color(0x40AFC4FF), Color.Transparent), center = c0, radius = 28.dp.toPx()),
-                                radius = 28.dp.toPx(), center = c0)
-                        }
+                        val tail = size.width * 0.38f
+                        val hx = -tail * 0.1f + (size.width + tail * 1.2f) * shT
+                        val hue = (shT * 600f) % 360f
+                        val hc = Color.hsv(hue, 0.55f, 1f)
+                        val hc2 = Color.hsv((hue + 70f) % 360f, 0.6f, 1f)
+                        // الخط الأساسي
                         drawRect(Brush.horizontalGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.12f), Color.White.copy(0.45f))),
                             topLeft = Offset(0f, yb - 1.dp.toPx()), size = Size(size.width, 2.dp.toPx()))
-                        drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Color.White, Color.Transparent), startX = x, endX = x + bw),
-                            topLeft = Offset(0f, yb - 1.5f.dp.toPx()), size = Size(size.width, 3.dp.toPx()))
+                        // الذيل
+                        drawRect(Brush.horizontalGradient(listOf(Color.Transparent, hc2.copy(alpha = 0.55f), Color.White), startX = hx - tail, endX = hx),
+                            topLeft = Offset(hx - tail, yb - 1.5f.dp.toPx()), size = Size(tail, 3.dp.toPx()))
+                        drawRect(Brush.horizontalGradient(listOf(Color.Transparent, hc.copy(alpha = 0.16f)), startX = hx - tail, endX = hx),
+                            topLeft = Offset(hx - tail, yb - 7.dp.toPx()), size = Size(tail, 14.dp.toPx()))
+                        drawRect(Brush.horizontalGradient(listOf(Color.Transparent, hc.copy(alpha = 0.07f)), startX = hx - tail * 0.9f, endX = hx),
+                            topLeft = Offset(hx - tail * 0.9f, yb - 16.dp.toPx()), size = Size(tail * 0.9f, 32.dp.toPx()))
+                        // هالة الرأس
+                        val c0 = Offset(hx, yb)
+                        drawCircle(Brush.radialGradient(listOf(hc.copy(alpha = 0.55f), Color.Transparent), center = c0, radius = 26.dp.toPx()),
+                            radius = 26.dp.toPx(), center = c0)
+                        // نجمة بأربع رؤوس + نجمة مائلة أصغر
+                        val pulse = 1f + 0.12f * kotlin.math.sin(shT * 60f)
+                        val big = 15.dp.toPx() * pulse
+                        drawPath(starPath(c0, big, big * 0.5f),
+                            Brush.radialGradient(listOf(Color.White, hc, hc2.copy(alpha = 0.6f)), center = c0, radius = big))
+                        rotate(45f, pivot = c0) {
+                            val sm = big * 0.65f
+                            drawPath(starPath(c0, sm, sm * 0.5f),
+                                Brush.radialGradient(listOf(Color.White, hc2.copy(alpha = 0.9f), Color.Transparent), center = c0, radius = sm))
+                        }
+                        drawCircle(Color.White, radius = 2.5.dp.toPx(), center = c0)
                     })
                     Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -687,16 +707,28 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         }
                         LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
                             item {
-                                Chip("★ المفضلة", { pageProg() }, Modifier.onGloballyPositioned { chipX[-1] = it.positionInRoot().x + it.size.width / 2f }) { tab = -1 }
+                                Chip("★ المفضلة", { 1f - pageProg() }, Modifier.onGloballyPositioned { chipX[-1] = it.positionInRoot().x + it.size.width / 2f }) { tab = -1 }
                             }
                             itemsIndexed(lists) { i, u ->
                                 val a by animateFloatAsState(targetValue = if (mainTab == i) 1f else 0f, animationSpec = tween(220), label = "sel")
-                                Chip(u.substringAfterLast('/').substringBefore('?').removeSuffix(".m3u").ifEmpty { "قائمة" }.take(16), { a * (1f - pageProg()) },
-                                    Modifier.onGloballyPositioned { chipX[i] = it.positionInRoot().x + it.size.width / 2f }, onLong = {
-                                    lists = lists.filterIndexed { j, _ -> j != i }
-                                    store.savePlaylists(lists)
-                                    tab = if (lists.isEmpty()) -1 else 0
-                                }) { tab = i }
+                                val label = names[u]?.takeIf { it.isNotBlank() }
+                                    ?: u.substringAfterLast('/').substringBefore('?').removeSuffix(".m3u").ifEmpty { "قائمة" }
+                                Box {
+                                    Chip(label.take(24), { a * pageProg() },
+                                        Modifier.onGloballyPositioned { chipX[i] = it.positionInRoot().x + it.size.width / 2f },
+                                        onLong = { menuFor = i }) { tab = i }
+                                    DropdownMenu(expanded = menuFor == i, onDismissRequest = { menuFor = -1 }) {
+                                        DropdownMenuItem(text = { Text("إعادة تسمية") }, onClick = {
+                                            menuFor = -1; renameIdx = i; renameText = names[u] ?: label
+                                        })
+                                        DropdownMenuItem(text = { Text("حذف القائمة") }, onClick = {
+                                            menuFor = -1
+                                            lists = lists.filterIndexed { j, _ -> j != i }
+                                            store.savePlaylists(lists)
+                                            tab = if (lists.isEmpty()) -1 else 0
+                                        })
+                                    }
+                                }
                             }
                         }
                         // النقطة الديناميكية: تتبع السحب بين الصفحتين وتتمدد وهي تتحرك
@@ -709,7 +741,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                             .drawBehind {
                                 val favX = chipX[-1] ?: 0f
                                 val pageP = pageProg()
-                                val x = mix(mainX, favX, pageP) - dotLeft
+                                val x = mix(favX, mainX, pageP) - dotLeft
                                 val moving = kotlin.math.sin(Math.PI.toFloat() * pageP)
                                 val extra = kotlin.math.abs((chipX[mainTab] ?: 0f) - mainX).coerceAtMost(160f)
                                 val w = 16.dp.toPx() + moving * 36.dp.toPx() + extra * 0.4f
@@ -868,7 +900,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         // معامل التكبير عشان الفيديو يملأ الشاشة بعد التدوير
                         val sFull = if (portrait) kotlin.math.min(h, w * ar) / kotlin.math.min(w, h * ar) else 1f
                         // خروج من أفقي حقيقي: الفيديو ينزل ويصغر مع الإصبع
-                        val q = if (!portrait && full) 1f - fp else 0f
+                        val q = if (!portrait && full && fpDrag >= 0f) 1f - fp else 0f
                         val k = (1f + (sFull - 1f) * fp) * zoom * (1f - 0.15f * q)
                         scaleX = k; scaleY = k
                         rotationZ = if (portrait) 90f * fp else 0f
@@ -937,6 +969,22 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
             }
         }
     }
+
+    if (renameIdx in lists.indices) AlertDialog(
+        onDismissRequest = { renameIdx = -1 },
+        title = { Text("اسم القائمة") },
+        text = { TextField(value = renameText, onValueChange = { renameText = it }, singleLine = true) },
+        confirmButton = {
+            TextButton(onClick = {
+                val key = lists[renameIdx]
+                val clean = renameText.replace("\t", " ").replace("\n", " ").trim()
+                names = if (clean.isEmpty()) names - key else names + (key to clean)
+                store.saveNames(names)
+                renameIdx = -1
+            }) { Text("حفظ") }
+        },
+        dismissButton = { TextButton(onClick = { renameIdx = -1 }) { Text("إلغاء") } }
+    )
 
     if (showAdd) AlertDialog(
         onDismissRequest = { showAdd = false },
