@@ -188,16 +188,21 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onUserLeaveHint() {
+        trace("onUserLeaveHint playing=${controller.value?.isPlaying} pip=${pipOn()}")
         if (controller.value?.isPlaying == true && pipOn()) enterPip()
     }
 
-    override fun onStart() { super.onStart(); setVideo(true) }
+    override fun onStart() { super.onStart(); trace("activity onStart"); setVideo(true) }
+    override fun onResume() { super.onResume(); trace("activity onResume") }
+    override fun onPause() { super.onPause(); trace("activity onPause") }
+    override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); trace("window focus=$hasFocus") }
 
     // وضع الصوت فقط: نوقف الفيديو لما التطبيق يروح للخلفية عشان نوفر النت والبطارية
-    override fun onStop() { super.onStop(); if (!pipOn()) setVideo(false) }
+    override fun onStop() { super.onStop(); trace("activity onStop"); if (!pipOn()) setVideo(false) }
 
     override fun onPictureInPictureModeChanged(isInPip: Boolean, newConfig: Configuration) {
         super.onPictureInPictureModeChanged(isInPip, newConfig)
+        trace("pipChanged=$isInPip")
         inPip.value = isInPip
     }
 
@@ -358,6 +363,9 @@ private fun starPath(c: Offset, R: Float, r: Float): Path = Path().apply {
 }
 
 // سحب السجل: يحفظ آخر انهيار ويجمع سجل التطبيق (logcat) عشان تنسخه أو تشاركه بدون adb
+const val TG = "GIPTV"
+fun trace(m: String, e: Throwable? = null) { if (e != null) android.util.Log.i(TG, m, e) else android.util.Log.i(TG, m) }
+
 object Logs {
     private const val CRASH = "last_crash.txt"
 
@@ -382,6 +390,11 @@ object Logs {
             val f = java.io.File(ctx.filesDir, CRASH)
             if (f.exists()) sb.append("=== آخر انهيار ===\n").append(f.readText()).append("\n\n")
         } catch (_: Throwable) {}
+        try {
+            val pr = ProcessBuilder("logcat", "-d", "-v", "threadtime", "-s", "$TG:V").redirectErrorStream(true).start()
+            sb.append("=== تتبع التطبيق (GIPTV) ===\n").append(pr.inputStream.bufferedReader().readText()).append("\n")
+            pr.destroy()
+        } catch (_: Throwable) {}
         sb.append("=== logcat ===\n")
         try {
             val pr = ProcessBuilder("logcat", "-d", "-v", "threadtime", "-t", "1500").redirectErrorStream(true).start()
@@ -404,7 +417,16 @@ class RevealShape(private val p: Float, private val o: Rect, private val corner:
 }
 
 @Composable
-fun Video(p: Player, modifier: Modifier = Modifier) = AndroidView(
+fun Video(p: Player, modifier: Modifier = Modifier) {
+    DisposableEffect(Unit) {
+        trace("Video composed")
+        onDispose { trace("Video DISPOSED") }
+    }
+    VideoView(p, modifier)
+}
+
+@Composable
+fun VideoView(p: Player, modifier: Modifier = Modifier) = AndroidView(
     // TextureView عشان الزوم والتدوير يشتغلون صح
     factory = { c -> (LayoutInflater.from(c).inflate(R.layout.player_view, null, false) as PlayerView).apply { player = p } },
     update = { it.player = p },
@@ -542,6 +564,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         val l = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying; if (isPlaying) error = null }
             override fun onPlayerError(e: PlaybackException) {
+                trace("onPlayerError ${e.errorCodeName}: ${e.message}")
                 val msg = "تعذّر تشغيل القناة (${e.errorCodeName})"
                 error = msg
                 val c = cur
@@ -571,6 +594,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     }
 
     fun start(c: Channel, from: Rect? = null) {
+        trace("start(${c.name}) closing=$closing")
         if (closing) return
         error = null; qSel = null; vh = 0; ui = true; zoom = 1f; panX = 0f; panY = 0f
         Hdr.ref = c.ref; Hdr.ua = c.ua
@@ -628,6 +652,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
 
     // الخروج: الفيديو ينكمش راجع لمكان البطاقة، وبعدها نوقف التشغيل
     fun close() {
+        trace("close() closing=$closing cur=${cur?.name} reveal=${reveal.value}", Throwable("close caller"))
         if (closing || cur == null) return
         closing = true
         if (full) { full = false; bars(true) }
@@ -660,7 +685,9 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         }
     }
 
-    BackHandler(cur != null) { if (full) setFull(false) else close() }
+    BackHandler(cur != null) { trace("BackHandler fired full=$full"); if (full) setFull(false) else close() }
+    LaunchedEffect(cur) { trace("cur changed -> ${cur?.name} reveal=${reveal.value}") }
+    LaunchedEffect(inPip) { trace("inPip=$inPip") }
 
     if (inPip) {
         Box(Modifier.fillMaxSize().background(Color.Black)) { player?.let { Video(it) } }
@@ -933,6 +960,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                                         // الفيديو يرجع لمكان القناة اللي فتحته منها
                                         launch { dismissA.animateTo(0f, tween(480, easing = FastOutSlowInEasing)) }
                                         reveal.animateTo(0f, tween(480, easing = FastOutSlowInEasing))
+                                        trace("dismiss fly finished")
                                         player?.stop(); cur = null; error = null
                                         zoom = 1f; panX = 0f; panY = 0f
                                         flying = false; closing = false
