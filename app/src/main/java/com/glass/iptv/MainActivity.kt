@@ -35,6 +35,8 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -224,10 +226,51 @@ fun Modifier.glass(r: Dp = 24.dp, clipContent: Boolean = true): Modifier {
     return m.background(GlassFill, shape).border(1.dp, GlassStroke, shape)
 }
 
+// زر حي: ينضغط بنعومة ويرتد، يتوهج عند اللمس، وإطاره يلمع بدوران خفيف
+@Composable
+fun Modifier.liveGlass(r: Dp, onClick: () -> Unit): Modifier {
+    val src = remember { MutableInteractionSource() }
+    val pressed by src.collectIsPressedAsState()
+    val sc by animateFloatAsState(if (pressed) 0.88f else 1f, spring(dampingRatio = 0.4f, stiffness = 520f), label = "sc")
+    val gl by animateFloatAsState(if (pressed) 1f else 0f, tween(if (pressed) 90 else 420), label = "gl")
+    val ang by rememberInfiniteTransition(label = "rot").animateFloat(
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(5200, easing = LinearEasing)), label = "ang"
+    )
+    return this
+        .graphicsLayer { scaleX = sc; scaleY = sc }
+        .glass(r)
+        .drawWithContent {
+            drawContent()
+            val cr = CornerRadius(r.toPx())
+            // توهج عند اللمس
+            if (gl > 0.01f) drawRoundRect(
+                Brush.radialGradient(listOf(Color.White.copy(0.55f * gl), Color.White.copy(0.12f * gl)), center = center, radius = size.maxDimension * 0.7f),
+                cornerRadius = cr
+            )
+            // إطار لامع يدور (أقوى شوي وقت الضغط)
+            val a = ang
+            val brush = object : ShaderBrush() {
+                override fun createShader(size: Size): android.graphics.Shader =
+                    android.graphics.SweepGradient(
+                        size.width / 2f, size.height / 2f,
+                        intArrayOf(0x00A0E0FF, 0xFFFFFFFF.toInt(), 0x66B388FF, 0x00FFFFFF, 0x00FFFFFF),
+                        floatArrayOf(0f, 0.10f, 0.22f, 0.34f, 1f)
+                    ).apply {
+                        setLocalMatrix(android.graphics.Matrix().apply { postRotate(a, size.width / 2f, size.height / 2f) })
+                    }
+            }
+            val w = 2.dp.toPx()
+            drawRoundRect(brush, topLeft = Offset(w / 2f, w / 2f), size = Size(size.width - w, size.height - w),
+                cornerRadius = cr, style = androidx.compose.ui.graphics.drawscope.Stroke(w), alpha = 0.75f + 0.25f * gl)
+        }
+        .clickable(interactionSource = src, indication = null, onClick = onClick)
+}
+
 @Composable
 fun GlassButton(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(
-        modifier.height(52.dp).glass(18.dp).clickable(onClick = onClick).padding(horizontal = 8.dp),
+        modifier.height(52.dp).liveGlass(18.dp, onClick).padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center
     ) { Text(text, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1) }
 }
@@ -250,7 +293,7 @@ val IHead = mkIcon("M12 1c-4.97 0-9 4.03-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.8
 @Composable
 fun GlassIcon(icon: ImageVector, modifier: Modifier = Modifier, tint: Color = Color.White, onClick: () -> Unit) {
     Box(
-        modifier.height(52.dp).glass(18.dp).clickable(onClick = onClick),
+        modifier.height(52.dp).liveGlass(18.dp, onClick),
         contentAlignment = Alignment.Center
     ) { Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(26.dp)) }
 }
@@ -658,7 +701,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         .graphicsLayer { renderEffect = frost; clip = true }
                         .drawBehind { drawLayer(layer) })
                     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.White.copy(0.20f), Color.White.copy(0.07f)))))
-                    // حافة الهيدر السفلية: رأس نجمة متوهجة متغيرة الألوان وذيل يتلاشى بتوهج خفيف
+                    // حافة الهيدر السفلية: مذنّب متوهج متغير الألوان وذيل يتلاشى
                     Box(Modifier.align(Alignment.BottomCenter).offset(y = 30.dp).fillMaxWidth().height(60.dp).drawBehind {
                         val yb = size.height / 2f
                         val tail = size.width * 0.38f
@@ -669,28 +712,28 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         // الخط الأساسي
                         drawRect(Brush.horizontalGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.12f), Color.White.copy(0.45f))),
                             topLeft = Offset(0f, yb - 1.dp.toPx()), size = Size(size.width, 2.dp.toPx()))
-                        // الذيل
-                        drawRect(Brush.horizontalGradient(listOf(Color.Transparent, hc2.copy(alpha = 0.55f), Color.White), startX = hx - tail, endX = hx),
-                            topLeft = Offset(hx - tail, yb - 1.5f.dp.toPx()), size = Size(tail, 3.dp.toPx()))
-                        drawRect(Brush.horizontalGradient(listOf(Color.Transparent, hc.copy(alpha = 0.16f)), startX = hx - tail, endX = hx),
-                            topLeft = Offset(hx - tail, yb - 7.dp.toPx()), size = Size(tail, 14.dp.toPx()))
-                        drawRect(Brush.horizontalGradient(listOf(Color.Transparent, hc.copy(alpha = 0.07f)), startX = hx - tail * 0.9f, endX = hx),
-                            topLeft = Offset(hx - tail * 0.9f, yb - 16.dp.toPx()), size = Size(tail * 0.9f, 32.dp.toPx()))
-                        // هالة الرأس
-                        val c0 = Offset(hx, yb)
-                        drawCircle(Brush.radialGradient(listOf(hc.copy(alpha = 0.55f), Color.Transparent), center = c0, radius = 26.dp.toPx()),
-                            radius = 26.dp.toPx(), center = c0)
-                        // نجمة بأربع رؤوس + نجمة مائلة أصغر
-                        val pulse = 1f + 0.12f * kotlin.math.sin(shT * 60f)
-                        val big = 15.dp.toPx() * pulse
-                        drawPath(starPath(c0, big, big * 0.5f),
-                            Brush.radialGradient(listOf(Color.White, hc, hc2.copy(alpha = 0.6f)), center = c0, radius = big))
-                        rotate(45f, pivot = c0) {
-                            val sm = big * 0.65f
-                            drawPath(starPath(c0, sm, sm * 0.5f),
-                                Brush.radialGradient(listOf(Color.White, hc2.copy(alpha = 0.9f), Color.Transparent), center = c0, radius = sm))
+                        // مذنّب: ذيل مدبّب يتلاشى مع توهج وشرارات صغيرة، ونواة مضيئة
+                        fun taper(tw: Float) = Path().apply {
+                            moveTo(hx, yb - tw / 2f)
+                            quadraticBezierTo(hx - tail * 0.45f, yb - tw * 0.22f, hx - tail, yb)
+                            quadraticBezierTo(hx - tail * 0.45f, yb + tw * 0.22f, hx, yb + tw / 2f)
+                            close()
                         }
-                        drawCircle(Color.White, radius = 2.5.dp.toPx(), center = c0)
+                        drawPath(taper(30.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc.copy(alpha = 0.10f), hc2.copy(alpha = 0.26f)), startX = hx - tail, endX = hx))
+                        drawPath(taper(10.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc2.copy(alpha = 0.65f), Color.White), startX = hx - tail, endX = hx))
+                        for (i in 1..7) {
+                            val f = i / 8f
+                            val sp = Offset(hx - tail * f * 0.85f, yb + kotlin.math.sin(shT * 45f + i * 2.1f) * 7.dp.toPx() * f)
+                            drawCircle(hc2.copy(alpha = (1f - f) * 0.85f), radius = (2.4f - f * 1.6f).dp.toPx(), center = sp)
+                        }
+                        val c0 = Offset(hx, yb)
+                        val pulse = 1f + 0.10f * kotlin.math.sin(shT * 60f)
+                        drawCircle(Brush.radialGradient(listOf(hc.copy(alpha = 0.6f), Color.Transparent), center = c0, radius = 30.dp.toPx()),
+                            radius = 30.dp.toPx(), center = c0)
+                        val core = 11.dp.toPx() * pulse
+                        drawCircle(Brush.radialGradient(listOf(Color.White, hc, hc2.copy(alpha = 0.5f), Color.Transparent), center = c0, radius = core),
+                            radius = core, center = c0)
+                        drawCircle(Color.White, radius = 4.dp.toPx() * pulse, center = c0)
                     })
                     Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
