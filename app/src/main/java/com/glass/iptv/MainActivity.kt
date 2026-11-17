@@ -152,6 +152,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Logs.install(applicationContext)
         enableEdgeToEdge()
         // نطلب أعلى معدل تحديث للشاشة (120Hz) لتبقى الإيماءات سلسة
         if (Build.VERSION.SDK_INT >= 35) window.decorView.requestedFrameRate = View.REQUESTED_FRAME_RATE_CATEGORY_HIGH
@@ -354,6 +355,42 @@ private fun starPath(c: Offset, R: Float, r: Float): Path = Path().apply {
     quadraticBezierTo(c.x - k * R, c.y + k * r, c.x - R, c.y)
     quadraticBezierTo(c.x - k * R, c.y - k * r, c.x, c.y - r)
     close()
+}
+
+// سحب السجل: يحفظ آخر انهيار ويجمع سجل التطبيق (logcat) عشان تنسخه أو تشاركه بدون adb
+object Logs {
+    private const val CRASH = "last_crash.txt"
+
+    fun install(ctx: Context) {
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                java.io.File(ctx.filesDir, CRASH).writeText(
+                    "${java.util.Date()}\nthread=${t.name}\n" + android.util.Log.getStackTraceString(e)
+                )
+            } catch (_: Throwable) {}
+            prev?.uncaughtException(t, e)
+        }
+    }
+
+    fun collect(ctx: Context): String {
+        val sb = StringBuilder()
+        val ver = try { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName } catch (_: Throwable) { "?" }
+        sb.append("Glass IPTV $ver | ${Build.MANUFACTURER} ${Build.MODEL} | Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})\n")
+        sb.append("Time: ${java.util.Date()}\n\n")
+        try {
+            val f = java.io.File(ctx.filesDir, CRASH)
+            if (f.exists()) sb.append("=== آخر انهيار ===\n").append(f.readText()).append("\n\n")
+        } catch (_: Throwable) {}
+        sb.append("=== logcat ===\n")
+        try {
+            val pr = ProcessBuilder("logcat", "-d", "-v", "threadtime", "-t", "1500").redirectErrorStream(true).start()
+            sb.append(pr.inputStream.bufferedReader().readText())
+            pr.destroy()
+        } catch (e: Throwable) { sb.append("تعذّر قراءة logcat: ${e.message}") }
+        val t = sb.toString()
+        return if (t.length > 90_000) "...(مقصوص)\n" + t.takeLast(90_000) else t
+    }
 }
 
 // شكل القص: مستطيل يكبر من مكان بطاقة القناة لين يملأ الشاشة
@@ -745,6 +782,25 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                                 }
                                 DropdownMenu(expanded = menuMore, onDismissRequest = { menuMore = false }) {
                                     DropdownMenuItem(text = { Text("إضافة رابط") }, onClick = { menuMore = false; showAdd = true })
+                                    DropdownMenuItem(text = { Text("سحب السجل (Logs)") }, onClick = {
+                                        menuMore = false
+                                        scope.launch {
+                                            val t = withContext(Dispatchers.IO) { Logs.collect(ctx) }
+                                            try {
+                                                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                                cm.setPrimaryClip(android.content.ClipData.newPlainText("Glass IPTV log", t))
+                                            } catch (_: Throwable) {}
+                                            Toast.makeText(ctx, "تم نسخ السجل", Toast.LENGTH_SHORT).show()
+                                            try {
+                                                val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                                    type = "text/plain"
+                                                    putExtra(android.content.Intent.EXTRA_SUBJECT, "Glass IPTV log")
+                                                    putExtra(android.content.Intent.EXTRA_TEXT, t)
+                                                }
+                                                ctx.startActivity(android.content.Intent.createChooser(send, "مشاركة السجل").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                                            } catch (_: Throwable) {}
+                                        }
+                                    })
                                 }
                             }
                         }
