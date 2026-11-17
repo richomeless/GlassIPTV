@@ -231,16 +231,31 @@ fun Modifier.glass(r: Dp = 24.dp, clipContent: Boolean = true): Modifier {
     return m.background(GlassFill, shape).border(1.dp, GlassStroke, shape)
 }
 
-// زر حي: ينضغط بنعومة ويرتد، يتوهج عند اللمس، وإطاره يلمع بدوران خفيف
+// زر حي: نبضتان بطيئتان (عند الضغط وعند الرفع) مع هزة خفيفة، وإطاره يلمع بدوران بطيء وسلس
 @Composable
 fun Modifier.liveGlass(r: Dp, onClick: () -> Unit): Modifier {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
-    val sc by animateFloatAsState(if (pressed) 0.88f else 1f, spring(dampingRatio = 0.4f, stiffness = 520f), label = "sc")
-    val gl by animateFloatAsState(if (pressed) 1f else 0f, tween(if (pressed) 90 else 420), label = "gl")
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    // نبضة الحجم: زنبرك ناعم وبطيء (أبطأ بحوالي 10 أضعاف من قبل) فينبض عند الضغط وعند الرفع
+    val sc by animateFloatAsState(if (pressed) 0.9f else 1f, spring(dampingRatio = 0.45f, stiffness = 12f), label = "sc")
+    val glDown = remember { Animatable(0f) }
+    val glUp = remember { Animatable(0f) }
+    LaunchedEffect(pressed) {
+        if (pressed) {
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+            glUp.snapTo(0f)
+            glDown.animateTo(1f, tween(900, easing = FastOutSlowInEasing))
+        } else if (glDown.value > 0.02f) {
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+            glUp.snapTo(1f)
+            launch { glDown.animateTo(0f, tween(2400, easing = FastOutSlowInEasing)) }
+            glUp.animateTo(0f, tween(3000, easing = FastOutSlowInEasing))
+        }
+    }
     val ang by rememberInfiniteTransition(label = "rot").animateFloat(
         initialValue = 0f, targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(5200, easing = LinearEasing)), label = "ang"
+        animationSpec = infiniteRepeatable(tween(16000, easing = LinearEasing)), label = "ang"
     )
     return this
         .graphicsLayer { scaleX = sc; scaleY = sc }
@@ -248,26 +263,34 @@ fun Modifier.liveGlass(r: Dp, onClick: () -> Unit): Modifier {
         .drawWithContent {
             drawContent()
             val cr = CornerRadius(r.toPx())
-            // توهج عند اللمس
-            if (gl > 0.01f) drawRoundRect(
-                Brush.radialGradient(listOf(Color.White.copy(0.55f * gl), Color.White.copy(0.12f * gl)), center = center, radius = size.maxDimension * 0.7f),
+            val gd = glDown.value
+            val gu = glUp.value
+            // نبضة الضغط: توهج أبيض من المركز
+            if (gd > 0.01f) drawRoundRect(
+                Brush.radialGradient(listOf(Color.White.copy(0.45f * gd), Color.White.copy(0.10f * gd)), center = center, radius = size.maxDimension * 0.7f),
                 cornerRadius = cr
             )
-            // إطار لامع يدور: رأس لامع وذيل يتلاشى، مبني بتدرج دائري من Compose
+            // نبضة الرفع: وميض مزرق ناعم
+            if (gu > 0.01f) drawRoundRect(
+                Brush.radialGradient(listOf(Color(0xFFB8D8FF).copy(0.40f * gu), Color.Transparent), center = center, radius = size.maxDimension * 0.8f),
+                cornerRadius = cr
+            )
+            // إطار لامع يدور ببطء: رأس لامع وذيل طويل يتلاشى بنعومة
             val t = ang / 360f
-            val n = 16
+            val n = 48
             val stops = Array(n + 1) { i ->
                 val pos = i / n.toFloat()
                 var d = pos - t
                 if (d > 0.5f) d -= 1f
                 if (d < -0.5f) d += 1f
-                val k = if (d <= 0f) (1f + d / 0.28f).coerceIn(0f, 1f) else (1f - d / 0.06f).coerceIn(0f, 1f)
+                val u = if (d <= 0f) (1f + d / 0.30f).coerceIn(0f, 1f) else (1f - d / 0.08f).coerceIn(0f, 1f)
+                val k = u * u * (3f - 2f * u)
                 pos to Color(0.74f + 0.26f * k, 0.87f + 0.13f * k, 1f, k * k)
             }
             val w = 2.dp.toPx()
             drawRoundRect(Brush.sweepGradient(*stops, center = center), topLeft = Offset(w / 2f, w / 2f),
                 size = Size(size.width - w, size.height - w), cornerRadius = cr,
-                style = androidx.compose.ui.graphics.drawscope.Stroke(w), alpha = 0.8f + 0.2f * gl)
+                style = androidx.compose.ui.graphics.drawscope.Stroke(w), alpha = 0.8f + 0.2f * gd)
         }
         .clickable(interactionSource = src, indication = null, onClick = onClick)
 }
@@ -710,8 +733,8 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
             val t0 = withFrameNanos { it }
             while (true) {
                 val t = withFrameNanos { it }
-                val ph = ((t - t0) / 1_000_000L) % 7800L
-                shT = if (ph < 4400L) ph / 4400f else 1f
+                val ph = ((t - t0) / 1_000_000L) % 16000L
+                shT = if (ph < 12000L) ph / 12000f else 1f
             }
         }
     }
@@ -768,36 +791,43 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                     Box(Modifier.align(Alignment.BottomCenter).offset(y = 30.dp).fillMaxWidth().height(60.dp).drawBehind {
                         val yb = size.height / 2f
                         val tail = size.width * 0.38f
-                        val hx = -tail * 0.1f + (size.width + tail * 1.2f) * shT
-                        val hue = (shT * 600f) % 360f
+                        val x0 = size.width * 0.25f
+                        val x1 = size.width * 0.82f
+                        val hx = x0 + (x1 - x0) * shT
+                        fun sm(a: Float, b: Float, x: Float): Float { val u = ((x - a) / (b - a)).coerceIn(0f, 1f); return u * u * (3f - 2f * u) }
+                        val env = sm(0f, 0.3f, shT) * (1f - sm(0.6f, 1f, shT))
+                        val hue = 190f + 110f * shT
                         val hc = Color.hsv(hue, 0.55f, 1f)
                         val hc2 = Color.hsv((hue + 70f) % 360f, 0.6f, 1f)
                         // الخط الأساسي
                         drawRect(Brush.horizontalGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.12f), Color.White.copy(0.45f))),
                             topLeft = Offset(0f, yb - 1.dp.toPx()), size = Size(size.width, 2.dp.toPx()))
-                        // مذنّب صغير وناعم: ذيل قصير يتلاشى، نواة خافتة بدون حواف حادة
+                        // مذنّب صغير وناعم: يظهر تدريجياً من الربع ويتلاشى قبل نهاية الخط، وألوانه تتغير ببطء
+                        fun Color.a(x: Float) = copy(alpha = alpha * x * env)
                         val tl = size.width * 0.20f
                         fun taper(tw: Float) = Path().apply {
                             moveTo(hx, yb - tw / 2f)
                             quadraticBezierTo(hx - tl * 0.5f, yb - tw * 0.25f, hx - tl, yb)
                             quadraticBezierTo(hx - tl * 0.5f, yb + tw * 0.25f, hx, yb + tw / 2f)
-                            this.close()   // مهم: this عشان ما تنادي دالة close() حقت القناة
+                            this.close()   // this عشان ما تنادي دالة close() حقت القناة
                         }
-                        drawPath(taper(14.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc.copy(alpha = 0.05f), hc2.copy(alpha = 0.14f)), startX = hx - tl, endX = hx))
-                        drawPath(taper(5.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc2.copy(alpha = 0.28f), Color.White.copy(alpha = 0.6f)), startX = hx - tl, endX = hx))
-                        for (i in 1..4) {
-                            val f = i / 5f
-                            val sp = Offset(hx - tl * f * 0.8f, yb + kotlin.math.sin(shT * 45f + i * 2.1f) * 4.dp.toPx() * f)
-                            drawCircle(hc2.copy(alpha = (1f - f) * 0.4f), radius = (1.6f - f * 0.9f).dp.toPx(), center = sp)
+                        if (env > 0.002f) {
+                            drawPath(taper(14.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc.a(0.05f), hc2.a(0.14f)), startX = hx - tl, endX = hx))
+                            drawPath(taper(5.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc2.a(0.28f), Color.White.a(0.6f)), startX = hx - tl, endX = hx))
+                            for (i in 1..4) {
+                                val f = i / 5f
+                                val sp = Offset(hx - tl * f * 0.8f, yb + kotlin.math.sin(shT * 14f + i * 2.1f) * 4.dp.toPx() * f)
+                                drawCircle(hc2.a((1f - f) * 0.4f), radius = (1.6f - f * 0.9f).dp.toPx(), center = sp)
+                            }
+                            val c0 = Offset(hx, yb)
+                            val pulse = 1f + 0.06f * kotlin.math.sin(shT * 18f)
+                            val halo = 16.dp.toPx()
+                            drawCircle(Brush.radialGradient(listOf(hc.a(0.28f), Color.Transparent), center = c0, radius = halo),
+                                radius = halo, center = c0)
+                            val core = 6.dp.toPx() * pulse
+                            drawCircle(Brush.radialGradient(listOf(Color.White.a(0.85f), hc.a(0.5f), Color.Transparent), center = c0, radius = core),
+                                radius = core, center = c0)
                         }
-                        val c0 = Offset(hx, yb)
-                        val pulse = 1f + 0.06f * kotlin.math.sin(shT * 60f)
-                        val halo = 16.dp.toPx()
-                        drawCircle(Brush.radialGradient(listOf(hc.copy(alpha = 0.28f), Color.Transparent), center = c0, radius = halo),
-                            radius = halo, center = c0)
-                        val core = 6.dp.toPx() * pulse
-                        drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.85f), hc.copy(alpha = 0.5f), Color.Transparent), center = c0, radius = core),
-                            radius = core, center = c0)
                     })
                     Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
