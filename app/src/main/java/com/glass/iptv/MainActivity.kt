@@ -18,6 +18,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.*
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -71,6 +72,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
@@ -82,6 +84,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -111,6 +114,7 @@ import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
@@ -147,7 +151,16 @@ class MainActivity : ComponentActivity() {
         val f = MediaController.Builder(this, token).buildAsync()
         f.addListener({ controller.value = f.get() }, MoreExecutors.directExecutor())
         future = f
-        setContent { App(controller.value, inPip.value) { enterPip() } }
+        setContent {
+            // ثيم داكن عشان القوائم المنبثقة والحوارات تطلع بخلفية داكنة
+            MaterialTheme(
+                colorScheme = darkColorScheme(
+                    surface = Color(0xFF14161D), onSurface = Color(0xFFE6E8F0),
+                    surfaceContainer = Color(0xFF191B23), surfaceContainerHigh = Color(0xFF1D2029),
+                    background = Color(0xFF0A0B10), onBackground = Color(0xFFE6E8F0)
+                )
+            ) { App(controller.value, inPip.value) { enterPip() } }
+        }
     }
 
     private fun enterPip() {
@@ -236,12 +249,13 @@ fun GlassIcon(icon: ImageVector, modifier: Modifier = Modifier, tint: Color = Co
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun Chip(text: String, selected: Boolean, modifier: Modifier = Modifier, onLong: () -> Unit = {}, onClick: () -> Unit) {
-    // نفس الارتفاع ونفس الشكل لكل الأزرار، والتحديد يلوّن الخلفية بس
-    val shape = RoundedCornerShape(14.dp)
+fun Chip(text: String, sel: () -> Float, modifier: Modifier = Modifier, onLong: () -> Unit = {}, onClick: () -> Unit) {
+    // نفس الارتفاع ونفس الشكل لكل الأزرار، والتحديد تظليل حي يتبع السحب (يُقرأ وقت الرسم بس)
     Box(
         modifier.height(40.dp).glass(14.dp)
-            .background(if (selected) Color.White.copy(0.22f) else Color.Transparent, shape)
+            .drawBehind {
+                drawRoundRect(Color.White.copy(alpha = 0.22f * sel().coerceIn(0f, 1f)), cornerRadius = CornerRadius(14.dp.toPx()))
+            }
             .combinedClickable(onClick = onClick, onLongClick = onLong)
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center
@@ -372,6 +386,13 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     val fullP = remember { Animatable(0f) }
     var fpDrag by remember { mutableStateOf(-1f) }   // أثناء السحب بالإصبع: تقدم الشاشة الكاملة الحي
     fun fpNow() = if (fpDrag >= 0f) fpDrag else fullP.value
+    // رمي الفيديو للأسفل (سحب للأسفل في البورتريه)
+    val dismissA = remember { Animatable(0f) }
+    var dismissDrag by remember { mutableStateOf(-1f) }
+    var tilt by remember { mutableStateOf(1f) }
+    fun dyNow() = if (dismissDrag >= 0f) dismissDrag else dismissA.value
+    val cfg = LocalConfiguration.current
+    val winPortraitNow by rememberUpdatedState(cfg.orientation == Configuration.ORIENTATION_PORTRAIT)
     var vAr by remember { mutableStateOf(0f) }
     val ctlRot by remember { derivedStateOf { fpNow() > 0.5f } }
     val chipX = remember { mutableStateMapOf<Int, Float>() }
@@ -411,6 +432,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         val target = if (tab == -1) 1 else 0
         if (pager.currentPage != target) pager.animateScrollToPage(target)
     }
+    fun pageProg() = (pager.currentPage + pager.currentPageOffsetFraction).coerceIn(0f, 1f)
     LaunchedEffect(pager) {
         snapshotFlow { pager.settledPage }.collect { pg ->
             if (pg == 1 && tab != -1) tab = -1
@@ -488,25 +510,46 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         }
     }
 
-    // شاشة كاملة: الفيديو يلف ويكبر بأنيميشن (تدوير داخل التطبيق، بدون تدوير النظام)
+    // يكمّل أنيميشن الشاشة الكاملة: دخول (وبعد ثانية نقلب واجهة النظام فعلياً)، أو خروج
+    fun settleFull(p0: Float, target: Float) {
+        scope.launch {
+            fullP.snapTo(p0); fpDrag = -1f
+            if (target >= 1f) {
+                fullP.animateTo(1f, tween(320, easing = FastOutSlowInEasing))
+                delay(1000)
+                if (full) act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            } else {
+                if (!winPortraitNow) {
+                    // النظام أفقي فعلياً: نرجّعه بورتريه ثم الفيديو ينكمش بالأنيميشن
+                    fullP.snapTo(1f)
+                    act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    withTimeoutOrNull(2000) { snapshotFlow { winPortraitNow }.first { it } }
+                }
+                fullP.animateTo(0f, tween(380, easing = FastOutSlowInEasing))
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
+        }
+    }
+
     fun setFull(on: Boolean) {
         if (on == full) return
         full = on
         bars(!on)
-        scope.launch { fullP.animateTo(if (on) 1f else 0f, tween(480, easing = FastOutSlowInEasing)) }
+        settleFull(fpNow(), if (on) 1f else 0f)
     }
 
     // الخروج: الفيديو ينكمش راجع لمكان البطاقة، وبعدها نوقف التشغيل
     fun close() {
         if (closing || cur == null) return
         closing = true
-        if (full) { full = false; bars(true) }
+        if (full) { full = false; bars(true); act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
         scope.launch {
             if (fullP.value != 0f) fullP.snapTo(0f)
             reveal.animateTo(0f, tween(380, easing = FastOutSlowInEasing))
             player?.stop(); cur = null; error = null
             zoom = 1f; panX = 0f; panY = 0f
             closing = false
+            act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
 
@@ -546,20 +589,21 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     val shT by sh.animateFloat(
         initialValue = 0f, targetValue = 1f,
         animationSpec = infiniteRepeatable(keyframes<Float> {
-            durationMillis = 4200
+            durationMillis = 7800
             0f at 0 using LinearEasing
-            1f at 2000 using LinearEasing
-            1f at 4200
+            1f at 4400 using LinearEasing
+            1f at 7800
         }),
         label = "shT"
     )
-    val mainVisible by remember { derivedStateOf { cur == null || reveal.value < 0.995f } }
+    val mainVisible by remember { derivedStateOf { cur == null || reveal.value < 0.995f || dyNow() > 0f } }
     val c = cur
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (mainVisible) Box(Modifier.fillMaxSize().graphicsLayer {
             // الواجهة الرئيسية تصغر وتخفت شوي وقت ما الفيديو يفتح فوقها
-            val p = reveal.value.coerceIn(0f, 1f)
+            val dp = (dyNow() / (size.height * 0.6f)).coerceIn(0f, 1f)
+            val p = (reveal.value * (1f - dp)).coerceIn(0f, 1f)
             val k = 1f - 0.07f * p
             scaleX = k; scaleY = k; alpha = 1f - 0.6f * p
         }) {
@@ -602,12 +646,25 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         .graphicsLayer { renderEffect = frost; clip = true }
                         .drawBehind { drawLayer(layer) })
                     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.White.copy(0.20f), Color.White.copy(0.07f)))))
-                    // حافة الهيدر السفلية مع لمعة تمر من اليسار لليمين
-                    Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(2.dp).drawBehind {
-                        drawRect(Brush.horizontalGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.12f), Color.White.copy(0.45f))))
+                    // حافة الهيدر السفلية: لمعة بطيئة تمر من اليسار لليمين مع توهج ناعم حولها
+                    Box(Modifier.align(Alignment.BottomCenter).offset(y = 30.dp).fillMaxWidth().height(60.dp).drawBehind {
+                        val yb = size.height / 2f
                         val bw = size.width * 0.4f
                         val x = -bw + (size.width + bw * 2f) * shT
-                        drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Color.White, Color.Transparent), startX = x, endX = x + bw))
+                        val cx = x + bw / 2f
+                        val c0 = Offset(cx, yb)
+                        scale(scaleX = 8f, scaleY = 1f, pivot = c0) {
+                            drawCircle(Brush.radialGradient(listOf(Color(0x30AFC4FF), Color.Transparent), center = c0, radius = 24.dp.toPx()),
+                                radius = 24.dp.toPx(), center = c0)
+                        }
+                        scale(scaleX = 4f, scaleY = 1f, pivot = c0) {
+                            drawCircle(Brush.radialGradient(listOf(Color(0x80FFFFFF), Color(0x40AFC4FF), Color.Transparent), center = c0, radius = 28.dp.toPx()),
+                                radius = 28.dp.toPx(), center = c0)
+                        }
+                        drawRect(Brush.horizontalGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.12f), Color.White.copy(0.45f))),
+                            topLeft = Offset(0f, yb - 1.dp.toPx()), size = Size(size.width, 2.dp.toPx()))
+                        drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Color.White, Color.Transparent), startX = x, endX = x + bw),
+                            topLeft = Offset(0f, yb - 1.5f.dp.toPx()), size = Size(size.width, 3.dp.toPx()))
                     })
                     Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -624,10 +681,11 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         }
                         LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
                             item {
-                                Chip("★ المفضلة", tab == -1, Modifier.onGloballyPositioned { chipX[-1] = it.positionInRoot().x + it.size.width / 2f }) { tab = -1 }
+                                Chip("★ المفضلة", { pageProg() }, Modifier.onGloballyPositioned { chipX[-1] = it.positionInRoot().x + it.size.width / 2f }) { tab = -1 }
                             }
                             itemsIndexed(lists) { i, u ->
-                                Chip(u.substringAfterLast('/').substringBefore('?').removeSuffix(".m3u").ifEmpty { "قائمة" }.take(16), tab == i,
+                                val a by animateFloatAsState(targetValue = if (mainTab == i) 1f else 0f, animationSpec = tween(220), label = "sel")
+                                Chip(u.substringAfterLast('/').substringBefore('?').removeSuffix(".m3u").ifEmpty { "قائمة" }.take(16), { a * (1f - pageProg()) },
                                     Modifier.onGloballyPositioned { chipX[i] = it.positionInRoot().x + it.size.width / 2f }, onLong = {
                                     lists = lists.filterIndexed { j, _ -> j != i }
                                     store.savePlaylists(lists)
@@ -636,7 +694,6 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                             }
                         }
                         // النقطة الديناميكية: تتبع السحب بين الصفحتين وتتمدد وهي تتحرك
-                        val pageP = (pager.currentPage + pager.currentPageOffsetFraction).coerceIn(0f, 1f)
                         val mainX by animateFloatAsState(
                             targetValue = chipX[mainTab] ?: 0f,
                             animationSpec = spring(dampingRatio = 0.65f, stiffness = 260f), label = "mx"
@@ -645,6 +702,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                             .onGloballyPositioned { dotLeft = it.positionInRoot().x }
                             .drawBehind {
                                 val favX = chipX[-1] ?: 0f
+                                val pageP = pageProg()
                                 val x = mix(mainX, favX, pageP) - dotLeft
                                 val moving = kotlin.math.sin(Math.PI.toFloat() * pageP)
                                 val extra = kotlin.math.abs((chipX[mainTab] ?: 0f) - mainX).coerceAtMost(160f)
@@ -668,7 +726,18 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         val p = reveal.value.coerceIn(0f, 1f)
                         shape = RevealShape(p, origin, 22.dp.toPx())
                         clip = true
-                        alpha = (p * 4f).coerceIn(0f, 1f)
+                        var a = (p * 4f).coerceIn(0f, 1f)
+                        // رمي الفيديو للأسفل: ينزلق ويميل ويصغر ويخفت
+                        val dy = dyNow()
+                        if (dy > 0f) {
+                            val pr = (dy / size.height).coerceIn(0f, 1.3f)
+                            translationY = dy
+                            rotationZ = tilt * 9f * pr
+                            val sc = 1f - 0.18f * pr.coerceAtMost(1f)
+                            scaleX = sc; scaleY = sc
+                            a *= (1f - ((pr - 0.55f) / 0.5f).coerceIn(0f, 1f))
+                        }
+                        alpha = a
                     }
                     .background(Color.Black)
                     .pointerInput(Unit) {
@@ -681,6 +750,8 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                             var mode = 0            // 0 لا شي، 1 دخول شاشة كاملة، 2 خروج منها
                             var lastPos = down.position
                             val dist = 280.dp.toPx()
+                            // الربع السفلي من الشاشة (منطقة إيماءة الخروج من التطبيق) ما يفعّل الشاشة الكاملة
+                            val blockUp = !full && down.position.y > size.height * 0.8f
                             var prog = if (full) 1f else 0f
                             while (true) {
                                 val ev = awaitPointerEvent()
@@ -695,7 +766,9 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                                 if (!moved && tot.getDistance() > viewConfiguration.touchSlop) {
                                     moved = true
                                     if (zoom <= 1f && kotlin.math.abs(ay) > kotlin.math.abs(ax)) {
-                                        if (!full && ay < 0f) mode = 1 else if (full && ay > 0f) mode = 2
+                                        if (!full && ay < 0f && !blockUp) mode = 1
+                                        else if (full && ay > 0f) mode = 2
+                                        else if (!full && ay > 0f) mode = 3
                                     }
                                 }
                                 if (moved && zoom > 1f) {
@@ -706,6 +779,10 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                                     panX = (panX + d.x).coerceIn(-mx, mx)
                                     panY = (panY + d.y).coerceIn(-my, my)
                                     ch.consume()
+                                } else if (mode == 3) {
+                                    // سحب للأسفل في البورتريه: الفيديو ينزل مع الإصبع
+                                    dismissDrag = ay.coerceAtLeast(0f)
+                                    ch.consume()
                                 } else if (mode != 0) {
                                     // الفيديو يتحرك مع الإصبع حي
                                     prog = if (mode == 1) (-ay / dist).coerceIn(0f, 1f) else 1f - (ay / dist).coerceIn(0f, 1f)
@@ -713,6 +790,27 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                                     ch.consume()
                                 }
                                 lastPos = ch.position
+                            }
+                            if (mode == 3) {
+                                val v = vt.calculateVelocity()
+                                val hPx = size.height.toFloat()
+                                val dyEnd = dismissDrag.coerceAtLeast(0f)
+                                val throwIt = dyEnd > hPx * 0.2f || v.y > 1800f
+                                tilt = if (v.x >= 0f) 1f else -1f
+                                if (throwIt) closing = true
+                                scope.launch {
+                                    dismissA.snapTo(dyEnd); dismissDrag = -1f
+                                    if (throwIt) {
+                                        player?.stop()
+                                        dismissA.animateTo(hPx * 1.25f, tween(360, easing = FastOutLinearInEasing))
+                                        cur = null; error = null; zoom = 1f; panX = 0f; panY = 0f
+                                        reveal.snapTo(0f); dismissA.snapTo(0f)
+                                        closing = false
+                                    } else {
+                                        dismissA.animateTo(0f, spring(dampingRatio = 0.7f, stiffness = 300f))
+                                    }
+                                }
+                                return@awaitEachGesture
                             }
                             if (mode != 0) {
                                 // عند الإفلات: نكمل للنهاية أو نرجع حسب المسافة والسرعة
@@ -726,11 +824,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                                 }
                                 full = target == 1f
                                 bars(target == 0f)
-                                val p0 = prog
-                                scope.launch {
-                                    fullP.snapTo(p0); fpDrag = -1f
-                                    fullP.animateTo(target, tween(320, easing = FastOutSlowInEasing))
-                                }
+                                settleFull(prog, target)
                                 return@awaitEachGesture
                             }
                             if (!released || moved) return@awaitEachGesture
@@ -764,10 +858,12 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         val ar = if (vAr > 0f) vAr else 16f / 9f
                         // معامل التكبير عشان الفيديو يملأ الشاشة بعد التدوير
                         val sFull = if (portrait) kotlin.math.min(h, w * ar) / kotlin.math.min(w, h * ar) else 1f
-                        val k = (1f + (sFull - 1f) * fp) * zoom
+                        // خروج من أفقي حقيقي: الفيديو ينزل ويصغر مع الإصبع
+                        val q = if (!portrait && full) 1f - fp else 0f
+                        val k = (1f + (sFull - 1f) * fp) * zoom * (1f - 0.15f * q)
                         scaleX = k; scaleY = k
                         rotationZ = if (portrait) 90f * fp else 0f
-                        translationX = panX; translationY = panY
+                        translationX = panX; translationY = panY + q * 0.4f * h
                     })
                 }
                 // الأزرار تتدور مع الفيديو: نعيد ترتيبها بمقاس الشاشة بعد التدوير
