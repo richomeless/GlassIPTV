@@ -569,12 +569,12 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
     var pipMode by remember { mutableStateOf(store.pipMode()) }
     var menu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    // الأزرار تختفي تلقائياً بعد 3 ثواني من ظهورها (يتجدد العد عند أي لمسة على الأزرار)
+    // الأزرار تختفي تلقائياً بعد 5 ثواني من ظهورها (يتجدد العد عند أي لمسة على الأزرار)
     var uiTick by remember { mutableStateOf(0) }
     LaunchedEffect(cur, ui, menu, uiTick) {
         if (cur != null && ui && !menu) {
             snapshotFlow { reveal.value }.first { it >= 0.99f }
-            delay(3000)
+            delay(5000)
             ui = false
         }
     }
@@ -988,23 +988,29 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 val ax = if (rot) tot.y else tot.x
                                 if (!moved && tot.getDistance() > viewConfiguration.touchSlop) {
                                     moved = true
-                                    if (zoom <= 1f && kotlin.math.abs(ay) > kotlin.math.abs(ax)) {
+                                    val vert = kotlin.math.abs(ay) > kotlin.math.abs(ax)
+                                    val myTop = (zoom - 1f) * size.height / 2f
+                                    if (zoom <= 1f && vert) {
                                         if (!full && ay < 0f && !blockUp) mode = 1
                                         else if (full && ay > 0f) mode = 2
                                         else if (!full && ay > 0f) mode = 3
+                                    } else if (!full && ay > 0f && kotlin.math.abs(ay) > kotlin.math.abs(ax) * 0.7f &&
+                                        (zoom <= 1.15f || panY >= myTop - 6.dp.toPx())) {
+                                        // سحب للأسفل شبه عمودي، أو الفيديو مقرّب وواصل لحافته العليا: نقبل الرمي
+                                        mode = 3
                                     }
                                 }
-                                if (moved && zoom > 1f) {
+                                if (mode == 3) {
+                                    // سحب للأسفل في البورتريه: الفيديو ينزل مع الإصبع (حتى لو مقرّب)
+                                    dismissDrag = ay.coerceAtLeast(0f)
+                                    ch.consume()
+                                } else if (moved && zoom > 1f) {
                                     // تحريك الفيديو بعد الزوم
                                     val d = ch.position - lastPos
                                     val mx = (zoom - 1f) * size.width / 2f
                                     val my = (zoom - 1f) * size.height / 2f
                                     panX = (panX + d.x).coerceIn(-mx, mx)
                                     panY = (panY + d.y).coerceIn(-my, my)
-                                    ch.consume()
-                                } else if (mode == 3) {
-                                    // سحب للأسفل في البورتريه: الفيديو ينزل مع الإصبع
-                                    dismissDrag = ay.coerceAtLeast(0f)
                                     ch.consume()
                                 } else if (mode != 0) {
                                     // الفيديو يتحرك مع الإصبع حي
@@ -1018,7 +1024,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 val v = vt.calculateVelocity()
                                 val hPx = size.height.toFloat()
                                 val dyEnd = dismissDrag.coerceAtLeast(0f)
-                                val goBack = dyEnd > hPx * 0.18f || v.y > 1600f
+                                val goBack = dyEnd > hPx * 0.10f || v.y > 900f
                                 if (goBack) { closing = true; flying = true }
                                 scope.launch {
                                     dismissA.snapTo(dyEnd); dismissDrag = -1f
@@ -1064,7 +1070,14 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 lastP = ch.position
                                 val dyPic = if (full && size.height > size.width) -d.x else d.y
                                 if (dyPic != 0f) {
+                                    val z0 = zoom
                                     zoom = (zoom * kotlin.math.exp(dyPic / 450f)).coerceIn(1f, 4f)
+                                    // محور التقريب = مكان الإصبع (نقطة الضغطة الثانية) مو سنتر الفيديو
+                                    val r = zoom / z0
+                                    val px = second.position.x - size.width / 2f
+                                    val py = second.position.y - size.height / 2f
+                                    panX = px - r * (px - panX)
+                                    panY = py - r * (py - panY)
                                     val mx = (zoom - 1f) * size.width / 2f
                                     val my = (zoom - 1f) * size.height / 2f
                                     panX = panX.coerceIn(-mx, mx); panY = panY.coerceIn(-my, my)
@@ -1151,7 +1164,6 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 GlassIcon(if (full) IFullExit else IFull, Modifier.weight(1f)) { uiTick++; setFull(!full) }
                                 GlassIcon(if (pipMode) IPip else IHead, Modifier.weight(1f)) {
                                     uiTick++; pipMode = !pipMode; store.setPipMode(pipMode)
-                                    Toast.makeText(ctx, if (pipMode) "نافذة مصغّرة عند الخروج" else "صوت فقط عند الخروج", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
