@@ -316,12 +316,15 @@ fun Modifier.liveGlass(r: Dp, onClick: () -> Unit): Modifier {
         .clickable(interactionSource = src, indication = null, onClick = onClick)
 }
 
-// خط التطبيق: Outfit (خط هندسي ناعم يناسب الزجاج). الحروف العربية تنزل على خط النظام تلقائياً
+// خط التطبيق: Instrument Sans (رزين وهادئ). خط الشعار: Tektur (فضائي). الحروف العربية تنزل على خط النظام تلقائياً
 val AppFont = androidx.compose.ui.text.font.FontFamily(
-    androidx.compose.ui.text.font.Font(R.font.outfit_regular, FontWeight.Normal),
-    androidx.compose.ui.text.font.Font(R.font.outfit_regular, FontWeight.Medium),
-    androidx.compose.ui.text.font.Font(R.font.outfit_bold, FontWeight.SemiBold),
-    androidx.compose.ui.text.font.Font(R.font.outfit_bold, FontWeight.Bold)
+    androidx.compose.ui.text.font.Font(R.font.instrumentsans_regular, FontWeight.Normal),
+    androidx.compose.ui.text.font.Font(R.font.instrumentsans_regular, FontWeight.Medium),
+    androidx.compose.ui.text.font.Font(R.font.instrumentsans_bold, FontWeight.SemiBold),
+    androidx.compose.ui.text.font.Font(R.font.instrumentsans_bold, FontWeight.Bold)
+)
+val TitleFont = androidx.compose.ui.text.font.FontFamily(
+    androidx.compose.ui.text.font.Font(R.font.tektur_medium, FontWeight.Medium)
 )
 
 fun appTypography(): Typography {
@@ -338,26 +341,31 @@ fun appTypography(): Typography {
     )
 }
 
-// لمعة الشعار: كل فترة قصيرة يمر وميض أبيض على الحروف مع نجمة لامعة صغيرة
+// لمعة الشعار: وميض يمر على الحروف، وبعده طرف النص يتوهج ثم ينطفئ، وبعدها مهلة قبل المرور التالي
 @Composable
 fun Modifier.logoShimmer(): Modifier {
-    val p = remember { Animatable(0f) }
+    val sweep = remember { Animatable(0f) }
+    val tip = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         while (true) {
-            delay(5000)
-            p.snapTo(0f)
-            p.animateTo(1f, tween(1500, easing = FastOutSlowInEasing))
+            delay(4500)
+            sweep.snapTo(0f); tip.snapTo(0f)
+            sweep.animateTo(1f, tween(1600, easing = FastOutSlowInEasing))
+            tip.animateTo(1f, tween(1700, easing = LinearEasing))
+            sweep.snapTo(0f); tip.snapTo(0f)
         }
     }
     return this
         .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
         .drawWithContent {
             drawContent()
-            val v = p.value
+            val tw = size.width - 20.dp.toPx()   // عرض النص الفعلي (20dp مساحة للتوهج عند الطرف)
+            val cy = size.height / 2f
+            val lw = 1.6.dp.toPx()
+            val v = sweep.value
             if (v > 0f && v < 1f) {
-                val band = size.width * 0.28f
-                val cx = -band + (size.width + 2f * band) * v
-                // وميض على الحروف نفسها فقط
+                val band = tw * 0.28f
+                val cx = -band + (tw + 2f * band) * v
                 drawRect(
                     Brush.linearGradient(
                         listOf(Color.Transparent, Color.White, Color.Transparent),
@@ -365,16 +373,31 @@ fun Modifier.logoShimmer(): Modifier {
                     ),
                     blendMode = androidx.compose.ui.graphics.BlendMode.SrcAtop
                 )
-                // نجمة لامعة صغيرة تمر مع الوميض
                 val a = kotlin.math.sin(v * Math.PI.toFloat()).coerceIn(0f, 1f)
-                val c = Offset(cx, size.height * 0.45f)
-                val gr = 20.dp.toPx()
-                drawCircle(Brush.radialGradient(listOf(Color.White.copy(0.55f * a), Color.Transparent), center = c, radius = gr), radius = gr, center = c)
-                val lw = 1.6.dp.toPx()
-                drawLine(Color.White.copy(0.9f * a), Offset(c.x - 13.dp.toPx(), c.y), Offset(c.x + 13.dp.toPx(), c.y), lw, androidx.compose.ui.graphics.StrokeCap.Round)
-                drawLine(Color.White.copy(0.9f * a), Offset(c.x, c.y - 10.dp.toPx()), Offset(c.x, c.y + 10.dp.toPx()), lw, androidx.compose.ui.graphics.StrokeCap.Round)
+                val c = Offset(cx.coerceIn(0f, tw), cy)
+                val gr = 18.dp.toPx()
+                drawCircle(Brush.radialGradient(listOf(Color.White.copy(0.5f * a), Color.Transparent), center = c, radius = gr), radius = gr, center = c)
+                drawLine(Color.White.copy(0.9f * a), Offset(c.x - 12.dp.toPx(), c.y), Offset(c.x + 12.dp.toPx(), c.y), lw, androidx.compose.ui.graphics.StrokeCap.Round)
+                drawLine(Color.White.copy(0.9f * a), Offset(c.x, c.y - 9.dp.toPx()), Offset(c.x, c.y + 9.dp.toPx()), lw, androidx.compose.ui.graphics.StrokeCap.Round)
+            }
+            val g = tip.value
+            if (g > 0f && g < 1f) {
+                // يتوهج بسرعة ثم ينطفئ ببطء
+                val e = if (g < 0.18f) g / 0.18f else { val u = 1f - (g - 0.18f) / 0.82f; u * u }
+                // توهج على الحروف الأخيرة نفسها
+                drawRect(
+                    Brush.horizontalGradient(listOf(Color.Transparent, Color.White.copy(0.6f * e)), startX = tw * 0.55f, endX = tw),
+                    blendMode = androidx.compose.ui.graphics.BlendMode.SrcAtop
+                )
+                // لمعة عند طرف آخر حرف
+                val c = Offset(tw - 2.dp.toPx(), cy)
+                val gr = 22.dp.toPx() * (0.55f + 0.45f * e)
+                drawCircle(Brush.radialGradient(listOf(Color.White.copy(0.65f * e), Color.Transparent), center = c, radius = gr), radius = gr, center = c)
+                drawLine(Color.White.copy(0.95f * e), Offset(c.x - 16.dp.toPx() * e, c.y), Offset(c.x + 16.dp.toPx() * e, c.y), lw, androidx.compose.ui.graphics.StrokeCap.Round)
+                drawLine(Color.White.copy(0.95f * e), Offset(c.x, c.y - 12.dp.toPx() * e), Offset(c.x, c.y + 12.dp.toPx() * e), lw, androidx.compose.ui.graphics.StrokeCap.Round)
             }
         }
+        .padding(end = 20.dp)
 }
 
 val IVolOff = mkIcon("M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z")
@@ -1026,9 +1049,10 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                     })
                     Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Glass IPTV", color = Color.White.copy(alpha = 0.86f), fontSize = 30.sp, fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.6.sp,
-                                modifier = Modifier.weight(1f).padding(vertical = 10.dp).logoShimmer())
+                            Text("Glass IPTV", color = Color.White.copy(alpha = 0.88f), fontSize = 27.sp, fontFamily = TitleFont,
+                                fontWeight = FontWeight.Medium, letterSpacing = 2.sp,
+                                modifier = Modifier.padding(vertical = 10.dp).logoShimmer())
+                            Spacer(Modifier.weight(1f))
                             Box {
                                 Box(Modifier.size(40.dp).glass(14.dp).clickable { menuMore = true }, contentAlignment = Alignment.Center) {
                                     Icon(IMore, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
