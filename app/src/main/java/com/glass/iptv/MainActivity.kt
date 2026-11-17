@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Rational
 import android.view.LayoutInflater
+import android.view.View
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -146,6 +147,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // نطلب أعلى معدل تحديث للشاشة (120Hz) لتبقى الإيماءات سلسة
+        if (Build.VERSION.SDK_INT >= 35) window.decorView.requestedFrameRate = View.REQUESTED_FRAME_RATE_CATEGORY_HIGH
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         val token = SessionToken(this, ComponentName(this, PlaybackService::class.java))
         val f = MediaController.Builder(this, token).buildAsync()
@@ -389,7 +392,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     // رمي الفيديو للأسفل (سحب للأسفل في البورتريه)
     val dismissA = remember { Animatable(0f) }
     var dismissDrag by remember { mutableStateOf(-1f) }
-    var tilt by remember { mutableStateOf(1f) }
+    var flying by remember { mutableStateOf(false) }   // الفيديو راجع لبطاقته بأنيميشن
     fun dyNow() = if (dismissDrag >= 0f) dismissDrag else dismissA.value
     val cfg = LocalConfiguration.current
     val winPortraitNow by rememberUpdatedState(cfg.orientation == Configuration.ORIENTATION_PORTRAIT)
@@ -486,7 +489,10 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
         }
         player?.let { p ->
             val b = MediaItem.Builder().setUri(c.url)
-                .setMediaMetadata(MediaMetadata.Builder().setTitle(c.name).build())
+                .setMediaMetadata(MediaMetadata.Builder().setTitle(c.name).apply {
+                    // لوقو القناة يظهر في إشعار التشغيل وبطاقة الميديا
+                    if (c.logo.startsWith("http")) setArtworkUri(android.net.Uri.parse(c.logo))
+                }.build())
             if (c.url.contains(".m3u8")) b.setMimeType(MimeTypes.APPLICATION_M3U8)
             p.setMediaItem(b.build()); p.prepare(); p.play()
         }
@@ -585,22 +591,22 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     val layer = rememberGraphicsLayer()
     val frost = remember { if (Build.VERSION.SDK_INT >= 31) frostEffect(110f) else null }
     var menuMore by remember { mutableStateOf(false) }
-    val sh = rememberInfiniteTransition(label = "sh")
-    val shT by sh.animateFloat(
-        initialValue = 0f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(keyframes<Float> {
-            durationMillis = 7800
-            0f at 0 using LinearEasing
-            1f at 4400 using LinearEasing
-            1f at 7800
-        }),
-        label = "shT"
-    )
-    val mainVisible by remember { derivedStateOf { cur == null || reveal.value < 0.995f || dyNow() > 0f } }
+    // لمعة الهيدر: حلقة إطارات تشتغل فقط وأنت في الواجهة الرئيسية
+    var shT by remember { mutableStateOf(0f) }
+    LaunchedEffect(cur == null) {
+        if (cur == null) {
+            val t0 = withFrameNanos { it }
+            while (true) {
+                val t = withFrameNanos { it }
+                val ph = ((t - t0) / 1_000_000L) % 7800L
+                shT = if (ph < 4400L) ph / 4400f else 1f
+            }
+        }
+    }
     val c = cur
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        if (mainVisible) Box(Modifier.fillMaxSize().graphicsLayer {
+        Box(Modifier.fillMaxSize().graphicsLayer {
             // الواجهة الرئيسية تصغر وتخفت شوي وقت ما الفيديو يفتح فوقها
             val dp = (dyNow() / (size.height * 0.6f)).coerceIn(0f, 1f)
             val p = (reveal.value * (1f - dp)).coerceIn(0f, 1f)
@@ -722,24 +728,17 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
             Box(
                 Modifier.fillMaxSize()
                     .graphicsLayer {
-                        // الفيديو يتوسع من مكان البطاقة لين يملأ الشاشة
+                        // الإطار يتوسع/ينكمش بين البطاقة والشاشة الكاملة
                         val p = reveal.value.coerceIn(0f, 1f)
                         shape = RevealShape(p, origin, 22.dp.toPx())
                         clip = true
-                        var a = (p * 4f).coerceIn(0f, 1f)
-                        // رمي الفيديو للأسفل: ينزلق ويميل ويصغر ويخفت
-                        val dy = dyNow()
-                        if (dy > 0f) {
-                            val pr = (dy / size.height).coerceIn(0f, 1.3f)
-                            translationY = dy
-                            rotationZ = tilt * 9f * pr
-                            val sc = 1f - 0.18f * pr.coerceAtMost(1f)
-                            scaleX = sc; scaleY = sc
-                            a *= (1f - ((pr - 0.55f) / 0.5f).coerceIn(0f, 1f))
-                        }
-                        alpha = a
+                        alpha = (p * 4f).coerceIn(0f, 1f)
                     }
-                    .background(Color.Black)
+                    .drawBehind {
+                        // الخلفية السوداء تختفي أثناء السحب للأسفل عشان تشوف الواجهة وراء الفيديو
+                        val bgA = if (flying) 0f else (1f - dyNow() / (size.height * 0.12f)).coerceIn(0f, 1f)
+                        drawRect(Color.Black, alpha = bgA)
+                    }
                     .pointerInput(Unit) {
                         awaitEachGesture {
                             val down = awaitFirstDown()
@@ -795,17 +794,17 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                                 val v = vt.calculateVelocity()
                                 val hPx = size.height.toFloat()
                                 val dyEnd = dismissDrag.coerceAtLeast(0f)
-                                val throwIt = dyEnd > hPx * 0.2f || v.y > 1800f
-                                tilt = if (v.x >= 0f) 1f else -1f
-                                if (throwIt) closing = true
+                                val goBack = dyEnd > hPx * 0.18f || v.y > 1600f
+                                if (goBack) { closing = true; flying = true }
                                 scope.launch {
                                     dismissA.snapTo(dyEnd); dismissDrag = -1f
-                                    if (throwIt) {
-                                        player?.stop()
-                                        dismissA.animateTo(hPx * 1.25f, tween(360, easing = FastOutLinearInEasing))
-                                        cur = null; error = null; zoom = 1f; panX = 0f; panY = 0f
-                                        reveal.snapTo(0f); dismissA.snapTo(0f)
-                                        closing = false
+                                    if (goBack) {
+                                        // الفيديو يرجع لمكان القناة اللي فتحته منها
+                                        launch { dismissA.animateTo(0f, tween(480, easing = FastOutSlowInEasing)) }
+                                        reveal.animateTo(0f, tween(480, easing = FastOutSlowInEasing))
+                                        player?.stop(); cur = null; error = null
+                                        zoom = 1f; panX = 0f; panY = 0f
+                                        flying = false; closing = false
                                     } else {
                                         dismissA.animateTo(0f, spring(dampingRatio = 0.7f, stiffness = 300f))
                                     }
@@ -850,6 +849,16 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         }
                     }
             ) {
+              Box(Modifier.fillMaxSize().graphicsLayer {
+                // الفيديو يطير لبطاقة القناة: يصغر ويتحرك لمركزها، ومع السحب ينزل مع الإصبع
+                val p = reveal.value.coerceIn(0f, 1f)
+                val k0 = mix(origin.width.coerceAtLeast(1f) / size.width, 1f, p)
+                val dy = dyNow()
+                val kd = 1f - 0.2f * (dy / size.height).coerceIn(0f, 1f)
+                scaleX = k0 * kd; scaleY = k0 * kd
+                translationX = (origin.center.x - size.width / 2f) * (1f - p)
+                translationY = (origin.center.y - size.height / 2f) * (1f - p) + dy
+              }) {
                 player?.let {
                     Video(it, Modifier.graphicsLayer {
                         val fp = fpNow()
@@ -884,7 +893,8 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         if (uiAlpha > 0.01f) Box(Modifier.fillMaxSize().graphicsLayer {
                             val fp = fpNow()
                     val steady = kotlin.math.max((1f - fp * 4f).coerceIn(0f, 1f), ((fp - 0.75f) * 4f).coerceIn(0f, 1f))
-                    alpha = uiAlpha * ((reveal.value - 0.6f) / 0.4f).coerceIn(0f, 1f) * steady
+                    val dd = if (flying) 0f else (1f - dyNow() / (size.height * 0.1f)).coerceIn(0f, 1f)
+                    alpha = uiAlpha * ((reveal.value - 0.6f) / 0.4f).coerceIn(0f, 1f) * steady * dd
                         }) {
                             Row(
                                 Modifier.align(Alignment.TopStart).graphicsLayer { translationY = -(1f - uiAlpha) * 28.dp.toPx() }
@@ -923,6 +933,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
 
                     }
                 }
+              }
             }
         }
     }
