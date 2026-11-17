@@ -30,6 +30,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.pager.HorizontalPager
@@ -408,12 +410,12 @@ fun GlassVolume(player: Player, onTouch: () -> Unit, modifier: Modifier = Modifi
                     .pointerInput(Unit) {
                         val r = 10.dp.toPx()
                         fun frac(x: Float) = ((x - r) / (size.width - 2f * r).coerceAtLeast(1f)).coerceIn(0f, 1f)
-                        androidx.compose.foundation.gestures.detectTapGestures { o -> onTouch(); set(frac(o.x)); save() }
+                        detectTapGestures { o -> onTouch(); set(frac(o.x)); save() }
                     }
                     .pointerInput(Unit) {
                         val r = 10.dp.toPx()
                         fun frac(x: Float) = ((x - r) / (size.width - 2f * r).coerceAtLeast(1f)).coerceIn(0f, 1f)
-                        androidx.compose.foundation.gestures.detectHorizontalDragGestures(
+                        detectHorizontalDragGestures(
                             onDragStart = { o -> onTouch(); set(frac(o.x)) },
                             onDragEnd = { save() }, onDragCancel = { save() }
                         ) { ch, _ -> ch.consume(); onTouch(); set(frac(ch.position.x)) }
