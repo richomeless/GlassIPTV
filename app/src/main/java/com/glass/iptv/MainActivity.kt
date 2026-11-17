@@ -36,7 +36,6 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -248,21 +247,21 @@ fun Modifier.liveGlass(r: Dp, onClick: () -> Unit): Modifier {
                 Brush.radialGradient(listOf(Color.White.copy(0.55f * gl), Color.White.copy(0.12f * gl)), center = center, radius = size.maxDimension * 0.7f),
                 cornerRadius = cr
             )
-            // إطار لامع يدور (أقوى شوي وقت الضغط)
-            val a = ang
-            val brush = object : ShaderBrush() {
-                override fun createShader(size: Size): android.graphics.Shader =
-                    android.graphics.SweepGradient(
-                        size.width / 2f, size.height / 2f,
-                        intArrayOf(0x00A0E0FF, 0xFFFFFFFF.toInt(), 0x66B388FF, 0x00FFFFFF, 0x00FFFFFF),
-                        floatArrayOf(0f, 0.10f, 0.22f, 0.34f, 1f)
-                    ).apply {
-                        setLocalMatrix(android.graphics.Matrix().apply { postRotate(a, size.width / 2f, size.height / 2f) })
-                    }
+            // إطار لامع يدور: رأس لامع وذيل يتلاشى، مبني بتدرج دائري من Compose
+            val t = ang / 360f
+            val n = 16
+            val stops = Array(n + 1) { i ->
+                val pos = i / n.toFloat()
+                var d = pos - t
+                if (d > 0.5f) d -= 1f
+                if (d < -0.5f) d += 1f
+                val k = if (d <= 0f) (1f + d / 0.28f).coerceIn(0f, 1f) else (1f - d / 0.06f).coerceIn(0f, 1f)
+                pos to Color(0.74f + 0.26f * k, 0.87f + 0.13f * k, 1f, k * k)
             }
             val w = 2.dp.toPx()
-            drawRoundRect(brush, topLeft = Offset(w / 2f, w / 2f), size = Size(size.width - w, size.height - w),
-                cornerRadius = cr, style = androidx.compose.ui.graphics.drawscope.Stroke(w), alpha = 0.75f + 0.25f * gl)
+            drawRoundRect(Brush.sweepGradient(*stops, center = center), topLeft = Offset(w / 2f, w / 2f),
+                size = Size(size.width - w, size.height - w), cornerRadius = cr,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(w), alpha = 0.8f + 0.2f * gl)
         }
         .clickable(interactionSource = src, indication = null, onClick = onClick)
 }
@@ -712,28 +711,29 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                         // الخط الأساسي
                         drawRect(Brush.horizontalGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.12f), Color.White.copy(0.45f))),
                             topLeft = Offset(0f, yb - 1.dp.toPx()), size = Size(size.width, 2.dp.toPx()))
-                        // مذنّب: ذيل مدبّب يتلاشى مع توهج وشرارات صغيرة، ونواة مضيئة
+                        // مذنّب صغير وناعم: ذيل قصير يتلاشى، نواة خافتة بدون حواف حادة
+                        val tl = size.width * 0.20f
                         fun taper(tw: Float) = Path().apply {
                             moveTo(hx, yb - tw / 2f)
-                            quadraticBezierTo(hx - tail * 0.45f, yb - tw * 0.22f, hx - tail, yb)
-                            quadraticBezierTo(hx - tail * 0.45f, yb + tw * 0.22f, hx, yb + tw / 2f)
+                            quadraticBezierTo(hx - tl * 0.5f, yb - tw * 0.25f, hx - tl, yb)
+                            quadraticBezierTo(hx - tl * 0.5f, yb + tw * 0.25f, hx, yb + tw / 2f)
                             close()
                         }
-                        drawPath(taper(30.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc.copy(alpha = 0.10f), hc2.copy(alpha = 0.26f)), startX = hx - tail, endX = hx))
-                        drawPath(taper(10.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc2.copy(alpha = 0.65f), Color.White), startX = hx - tail, endX = hx))
-                        for (i in 1..7) {
-                            val f = i / 8f
-                            val sp = Offset(hx - tail * f * 0.85f, yb + kotlin.math.sin(shT * 45f + i * 2.1f) * 7.dp.toPx() * f)
-                            drawCircle(hc2.copy(alpha = (1f - f) * 0.85f), radius = (2.4f - f * 1.6f).dp.toPx(), center = sp)
+                        drawPath(taper(14.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc.copy(alpha = 0.05f), hc2.copy(alpha = 0.14f)), startX = hx - tl, endX = hx))
+                        drawPath(taper(5.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc2.copy(alpha = 0.28f), Color.White.copy(alpha = 0.6f)), startX = hx - tl, endX = hx))
+                        for (i in 1..4) {
+                            val f = i / 5f
+                            val sp = Offset(hx - tl * f * 0.8f, yb + kotlin.math.sin(shT * 45f + i * 2.1f) * 4.dp.toPx() * f)
+                            drawCircle(hc2.copy(alpha = (1f - f) * 0.4f), radius = (1.6f - f * 0.9f).dp.toPx(), center = sp)
                         }
                         val c0 = Offset(hx, yb)
-                        val pulse = 1f + 0.10f * kotlin.math.sin(shT * 60f)
-                        drawCircle(Brush.radialGradient(listOf(hc.copy(alpha = 0.6f), Color.Transparent), center = c0, radius = 30.dp.toPx()),
-                            radius = 30.dp.toPx(), center = c0)
-                        val core = 11.dp.toPx() * pulse
-                        drawCircle(Brush.radialGradient(listOf(Color.White, hc, hc2.copy(alpha = 0.5f), Color.Transparent), center = c0, radius = core),
+                        val pulse = 1f + 0.06f * kotlin.math.sin(shT * 60f)
+                        val halo = 16.dp.toPx()
+                        drawCircle(Brush.radialGradient(listOf(hc.copy(alpha = 0.28f), Color.Transparent), center = c0, radius = halo),
+                            radius = halo, center = c0)
+                        val core = 6.dp.toPx() * pulse
+                        drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.85f), hc.copy(alpha = 0.5f), Color.Transparent), center = c0, radius = core),
                             radius = core, center = c0)
-                        drawCircle(Color.White, radius = 4.dp.toPx() * pulse, center = c0)
                     })
                     Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
