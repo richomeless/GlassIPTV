@@ -166,6 +166,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             // ثيم داكن عشان القوائم المنبثقة والحوارات تطلع بخلفية داكنة
             MaterialTheme(
+                typography = appTypography(),
                 colorScheme = darkColorScheme(
                     surface = Color(0xFF14161D), onSurface = Color(0xFFE6E8F0),
                     surfaceContainer = Color(0xFF191B23), surfaceContainerHigh = Color(0xFF1D2029),
@@ -311,6 +312,131 @@ fun Modifier.liveGlass(r: Dp, onClick: () -> Unit): Modifier {
                 style = androidx.compose.ui.graphics.drawscope.Stroke(w), alpha = 0.8f + 0.2f * gl)
         }
         .clickable(interactionSource = src, indication = null, onClick = onClick)
+}
+
+// خط التطبيق: Outfit (خط هندسي ناعم يناسب الزجاج). الحروف العربية تنزل على خط النظام تلقائياً
+val AppFont = androidx.compose.ui.text.font.FontFamily(
+    androidx.compose.ui.text.font.Font(R.font.outfit_regular, FontWeight.Normal),
+    androidx.compose.ui.text.font.Font(R.font.outfit_regular, FontWeight.Medium),
+    androidx.compose.ui.text.font.Font(R.font.outfit_bold, FontWeight.SemiBold),
+    androidx.compose.ui.text.font.Font(R.font.outfit_bold, FontWeight.Bold)
+)
+
+fun appTypography(): Typography {
+    val d = Typography()
+    return Typography(
+        displayLarge = d.displayLarge.copy(fontFamily = AppFont), displayMedium = d.displayMedium.copy(fontFamily = AppFont),
+        displaySmall = d.displaySmall.copy(fontFamily = AppFont), headlineLarge = d.headlineLarge.copy(fontFamily = AppFont),
+        headlineMedium = d.headlineMedium.copy(fontFamily = AppFont), headlineSmall = d.headlineSmall.copy(fontFamily = AppFont),
+        titleLarge = d.titleLarge.copy(fontFamily = AppFont), titleMedium = d.titleMedium.copy(fontFamily = AppFont),
+        titleSmall = d.titleSmall.copy(fontFamily = AppFont), bodyLarge = d.bodyLarge.copy(fontFamily = AppFont),
+        bodyMedium = d.bodyMedium.copy(fontFamily = AppFont), bodySmall = d.bodySmall.copy(fontFamily = AppFont),
+        labelLarge = d.labelLarge.copy(fontFamily = AppFont), labelMedium = d.labelMedium.copy(fontFamily = AppFont),
+        labelSmall = d.labelSmall.copy(fontFamily = AppFont)
+    )
+}
+
+// لمعة الشعار: كل فترة قصيرة يمر وميض أبيض على الحروف مع نجمة لامعة صغيرة
+@Composable
+fun Modifier.logoShimmer(): Modifier {
+    val p = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(5000)
+            p.snapTo(0f)
+            p.animateTo(1f, tween(1500, easing = FastOutSlowInEasing))
+        }
+    }
+    return this
+        .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+        .drawWithContent {
+            drawContent()
+            val v = p.value
+            if (v > 0f && v < 1f) {
+                val band = size.width * 0.28f
+                val cx = -band + (size.width + 2f * band) * v
+                // وميض على الحروف نفسها فقط
+                drawRect(
+                    Brush.linearGradient(
+                        listOf(Color.Transparent, Color.White, Color.Transparent),
+                        start = Offset(cx - band / 2f, 0f), end = Offset(cx + band / 2f, size.height * 0.35f)
+                    ),
+                    blendMode = androidx.compose.ui.graphics.BlendMode.SrcAtop
+                )
+                // نجمة لامعة صغيرة تمر مع الوميض
+                val a = kotlin.math.sin(v * Math.PI.toFloat()).coerceIn(0f, 1f)
+                val c = Offset(cx, size.height * 0.45f)
+                val gr = 20.dp.toPx()
+                drawCircle(Brush.radialGradient(listOf(Color.White.copy(0.55f * a), Color.Transparent), center = c, radius = gr), radius = gr, center = c)
+                val lw = 1.6.dp.toPx()
+                drawLine(Color.White.copy(0.9f * a), Offset(c.x - 13.dp.toPx(), c.y), Offset(c.x + 13.dp.toPx(), c.y), lw, androidx.compose.ui.graphics.StrokeCap.Round)
+                drawLine(Color.White.copy(0.9f * a), Offset(c.x, c.y - 10.dp.toPx()), Offset(c.x, c.y + 10.dp.toPx()), lw, androidx.compose.ui.graphics.StrokeCap.Round)
+            }
+        }
+}
+
+val IVolOff = mkIcon("M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z")
+val IVolLow = mkIcon("M7 9v6h4l5 5V4l-5 5H7z")
+val IVolMid = mkIcon("M18.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM5 9v6h4l5 5V4L9 9H5z")
+val IVolHigh = mkIcon("M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z")
+
+// سلايدر صوت زجاجي: يتحكم بصوت مشغّل التطبيق، ويتذكر آخر مستوى
+@Composable
+fun GlassVolume(player: Player, onTouch: () -> Unit, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
+    val prefs = remember { ctx.getSharedPreferences("glass_volume", Context.MODE_PRIVATE) }
+    var vol by remember(player) { mutableFloatStateOf(player.volume.coerceIn(0f, 1f)) }
+    DisposableEffect(player) {
+        val l = object : Player.Listener { override fun onVolumeChanged(volume: Float) { vol = volume } }
+        player.addListener(l)
+        onDispose { player.removeListener(l) }
+    }
+    fun set(v: Float) { val x = v.coerceIn(0f, 1f); vol = x; player.volume = x }
+    fun save() { prefs.edit().putFloat("v", vol).apply() }
+    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Row(
+            modifier.fillMaxWidth().height(52.dp).glass(18.dp).padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                if (vol <= 0.001f) IVolOff else if (vol < 0.34f) IVolLow else if (vol < 0.67f) IVolMid else IVolHigh,
+                contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp).clickable { onTouch(); set(if (vol > 0.001f) 0f else 1f); save() }
+            )
+            Spacer(Modifier.width(12.dp))
+            Box(
+                Modifier.weight(1f).fillMaxHeight()
+                    .pointerInput(Unit) {
+                        val r = 10.dp.toPx()
+                        fun frac(x: Float) = ((x - r) / (size.width - 2f * r).coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        androidx.compose.foundation.gestures.detectTapGestures { o -> onTouch(); set(frac(o.x)); save() }
+                    }
+                    .pointerInput(Unit) {
+                        val r = 10.dp.toPx()
+                        fun frac(x: Float) = ((x - r) / (size.width - 2f * r).coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        androidx.compose.foundation.gestures.detectHorizontalDragGestures(
+                            onDragStart = { o -> onTouch(); set(frac(o.x)) },
+                            onDragEnd = { save() }, onDragCancel = { save() }
+                        ) { ch, _ -> ch.consume(); onTouch(); set(frac(ch.position.x)) }
+                    }
+            ) {
+                androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                    val r = 10.dp.toPx()
+                    val th = 6.dp.toPx()
+                    val cy = size.height / 2f
+                    val x = r + vol * (size.width - 2f * r)
+                    drawRoundRect(Color.White.copy(0.20f), Offset(r, cy - th / 2f), Size(size.width - 2f * r, th), CornerRadius(th / 2f))
+                    if (x > r) drawRoundRect(
+                        Brush.horizontalGradient(listOf(Color(0xFFA9D2FF), Color.White), startX = r, endX = x.coerceAtLeast(r + 1f)),
+                        Offset(r, cy - th / 2f), Size(x - r, th), CornerRadius(th / 2f)
+                    )
+                    drawCircle(Brush.radialGradient(listOf(Color.White.copy(0.55f), Color.Transparent), center = Offset(x, cy), radius = r * 2f), radius = r * 2f, center = Offset(x, cy))
+                    drawCircle(Color.White, radius = r * 0.75f, center = Offset(x, cy))
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Text("${(vol * 100).toInt()}", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(30.dp), textAlign = TextAlign.End)
+        }
+    }
 }
 
 @Composable
@@ -569,6 +695,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
     var pipMode by remember { mutableStateOf(store.pipMode()) }
     var menu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val hapticView = androidx.compose.ui.platform.LocalView.current
     // الأزرار تختفي تلقائياً بعد 5 ثواني من ظهورها (يتجدد العد عند أي لمسة على الأزرار)
     var uiTick by remember { mutableStateOf(0) }
     LaunchedEffect(cur, ui, menu, uiTick) {
@@ -745,6 +872,9 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
             reveal.animateTo(1f, tween(480, easing = FastOutSlowInEasing))
         }
     }
+    LaunchedEffect(player) {
+        player?.let { it.volume = ctx.getSharedPreferences("glass_volume", Context.MODE_PRIVATE).getFloat("v", 1f) }
+    }
     LaunchedEffect(cur) { trace("cur changed -> ${cur?.name} reveal=${reveal.value}") }
     LaunchedEffect(inPip) { trace("inPip=$inPip") }
 
@@ -867,8 +997,9 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                     })
                     Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Glass IPTV", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
-                                modifier = Modifier.weight(1f).padding(vertical = 10.dp))
+                            Text("Glass IPTV", color = Color.White.copy(alpha = 0.86f), fontSize = 30.sp, fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.6.sp,
+                                modifier = Modifier.weight(1f).padding(vertical = 10.dp).logoShimmer())
                             Box {
                                 Box(Modifier.size(40.dp).glass(14.dp).clickable { menuMore = true }, contentAlignment = Alignment.Center) {
                                     Icon(IMore, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
@@ -1062,12 +1193,14 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                             val second = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) { awaitFirstDown() }
                             if (second == null) { ui = !ui; return@awaitEachGesture }
                             var lastP = second.position
+                            var dragged = false
                             while (true) {
                                 val ev = awaitPointerEvent()
                                 val ch = ev.changes.firstOrNull { it.id == second.id } ?: break
                                 if (!ch.pressed) break
                                 val d = ch.position - lastP
                                 lastP = ch.position
+                                if (!dragged && (ch.position - second.position).getDistance() > viewConfiguration.touchSlop) dragged = true
                                 val dyPic = if (full && size.height > size.width) -d.x else d.y
                                 if (dyPic != 0f) {
                                     val z0 = zoom
@@ -1082,6 +1215,19 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     val my = (zoom - 1f) * size.height / 2f
                                     panX = panX.coerceIn(-mx, mx); panY = panY.coerceIn(-my, my)
                                     ch.consume()
+                                }
+                            }
+                            // ضغطتين بدون سحب: نلغي الزوم، الفيديو يرجع بحجمه الكامل بارتداد خفيف للخلف مع هزة
+                            if (!dragged && zoom > 1.02f) {
+                                val z0 = zoom; val x0 = panX; val y0 = panY
+                                buzz(hapticView, false)
+                                scope.launch {
+                                    val t = Animatable(0f)
+                                    t.animateTo(1f, spring(dampingRatio = 0.62f, stiffness = 380f)) {
+                                        zoom = z0 + (1f - z0) * value
+                                        panX = x0 * (1f - value); panY = y0 * (1f - value)
+                                    }
+                                    zoom = 1f; panX = 0f; panY = 0f
                                 }
                             }
                         }
@@ -1143,11 +1289,13 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 Text(c.name, color = Color.White, maxLines = 1, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                                 GlassIcon(if (isFav) IStarOn else IStarOff, Modifier.width(64.dp), if (isFav) Color(0xFFFFD60A) else Color.White) { uiTick++; toggleFav(c) }
                             }
-                            Row(
+                            Column(
                                 Modifier.align(Alignment.BottomCenter).graphicsLayer { translationY = (1f - uiAlpha) * 28.dp.toPx() }
                                     .fillMaxWidth().navigationBarsPadding().padding(12.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
+                            player?.let { GlassVolume(it, { uiTick++ }) }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 GlassIcon(if (playing) IPause else IPlay, Modifier.weight(1f)) {
                                     uiTick++
                                     player?.let { if (it.isPlaying) it.pause() else it.play() }
@@ -1165,6 +1313,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 GlassIcon(if (pipMode) IPip else IHead, Modifier.weight(1f)) {
                                     uiTick++; pipMode = !pipMode; store.setPipMode(pipMode)
                                 }
+                            }
                             }
                         }
 
