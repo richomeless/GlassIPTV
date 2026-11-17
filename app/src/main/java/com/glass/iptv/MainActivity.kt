@@ -149,10 +149,12 @@ class MainActivity : ComponentActivity() {
     private var future: ListenableFuture<MediaController>? = null
     private val controller = mutableStateOf<MediaController?>(null)
     private val inPip = mutableStateOf(false)
+    private val openReq = mutableStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Logs.install(applicationContext)
+        handleOpenIntent(intent)
         enableEdgeToEdge()
         // نطلب أعلى معدل تحديث للشاشة (120Hz) لتبقى الإيماءات سلسة
         if (Build.VERSION.SDK_INT >= 35) window.decorView.requestedFrameRate = View.REQUESTED_FRAME_RATE_CATEGORY_HIGH
@@ -169,8 +171,22 @@ class MainActivity : ComponentActivity() {
                     surfaceContainer = Color(0xFF191B23), surfaceContainerHigh = Color(0xFF1D2029),
                     background = Color(0xFF0A0B10), onBackground = Color(0xFFE6E8F0)
                 )
-            ) { App(controller.value, inPip.value) { enterPip() } }
+            ) { App(controller.value, inPip.value, openReq.value) { enterPip() } }
         }
+    }
+
+    // الضغط على إشعار التشغيل: نفتح الفيديو الشغال
+    private fun handleOpenIntent(i: android.content.Intent?) {
+        if (i?.getBooleanExtra("open_player", false) == true) {
+            i.removeExtra("open_player")
+            openReq.value = openReq.value + 1
+        }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleOpenIntent(intent)
     }
 
     private fun enterPip() {
@@ -231,31 +247,40 @@ fun Modifier.glass(r: Dp = 24.dp, clipContent: Boolean = true): Modifier {
     return m.background(GlassFill, shape).border(1.dp, GlassStroke, shape)
 }
 
-// زر حي: نبضتان بطيئتان (عند الضغط وعند الرفع) مع هزة خفيفة، وإطاره يلمع بدوران بطيء وسلس
+// هزة خفيفة: نجرب هزة النظام أول، وإذا ما اشتغلت نجرب الاهتزاز المباشر
+fun buzz(v: View, release: Boolean) {
+    val ok = try {
+        val c = if (release && Build.VERSION.SDK_INT >= 27) android.view.HapticFeedbackConstants.VIRTUAL_KEY_RELEASE
+                else android.view.HapticFeedbackConstants.VIRTUAL_KEY
+        v.performHapticFeedback(c)
+    } catch (_: Throwable) { false }
+    if (!ok) try {
+        val ctx = v.context
+        val vib: android.os.Vibrator = if (Build.VERSION.SDK_INT >= 31) {
+            ctx.getSystemService(android.os.VibratorManager::class.java).defaultVibrator
+        } else {
+            ctx.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+        }
+        vib.vibrate(android.os.VibrationEffect.createOneShot(if (release) 10L else 16L, 150))
+    } catch (_: Throwable) {}
+}
+
+// زر حي: يصغر وهو مضغوط ويرتد، يتوهج عند اللمس، وإطاره يلمع بدوران بطيء جداً وسلس، مع هزة عند الضغط وعند الرفع
 @Composable
 fun Modifier.liveGlass(r: Dp, onClick: () -> Unit): Modifier {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
-    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-    // نبضة الحجم: زنبرك ناعم وبطيء (أبطأ بحوالي 10 أضعاف من قبل) فينبض عند الضغط وعند الرفع
-    val sc by animateFloatAsState(if (pressed) 0.9f else 1f, spring(dampingRatio = 0.45f, stiffness = 12f), label = "sc")
-    val glDown = remember { Animatable(0f) }
-    val glUp = remember { Animatable(0f) }
+    val view = androidx.compose.ui.platform.LocalView.current
+    val armed = remember { booleanArrayOf(false) }
     LaunchedEffect(pressed) {
-        if (pressed) {
-            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-            glUp.snapTo(0f)
-            glDown.animateTo(1f, tween(900, easing = FastOutSlowInEasing))
-        } else if (glDown.value > 0.02f) {
-            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-            glUp.snapTo(1f)
-            launch { glDown.animateTo(0f, tween(2400, easing = FastOutSlowInEasing)) }
-            glUp.animateTo(0f, tween(3000, easing = FastOutSlowInEasing))
-        }
+        if (pressed) { armed[0] = true; buzz(view, false) }
+        else if (armed[0]) { armed[0] = false; buzz(view, true) }
     }
+    val sc by animateFloatAsState(if (pressed) 0.88f else 1f, spring(dampingRatio = 0.4f, stiffness = 520f), label = "sc")
+    val gl by animateFloatAsState(if (pressed) 1f else 0f, tween(if (pressed) 90 else 420), label = "gl")
     val ang by rememberInfiniteTransition(label = "rot").animateFloat(
         initialValue = 0f, targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(16000, easing = LinearEasing)), label = "ang"
+        animationSpec = infiniteRepeatable(tween(36000, easing = LinearEasing)), label = "ang"
     )
     return this
         .graphicsLayer { scaleX = sc; scaleY = sc }
@@ -263,16 +288,9 @@ fun Modifier.liveGlass(r: Dp, onClick: () -> Unit): Modifier {
         .drawWithContent {
             drawContent()
             val cr = CornerRadius(r.toPx())
-            val gd = glDown.value
-            val gu = glUp.value
-            // نبضة الضغط: توهج أبيض من المركز
-            if (gd > 0.01f) drawRoundRect(
-                Brush.radialGradient(listOf(Color.White.copy(0.45f * gd), Color.White.copy(0.10f * gd)), center = center, radius = size.maxDimension * 0.7f),
-                cornerRadius = cr
-            )
-            // نبضة الرفع: وميض مزرق ناعم
-            if (gu > 0.01f) drawRoundRect(
-                Brush.radialGradient(listOf(Color(0xFFB8D8FF).copy(0.40f * gu), Color.Transparent), center = center, radius = size.maxDimension * 0.8f),
+            // توهج عند اللمس
+            if (gl > 0.01f) drawRoundRect(
+                Brush.radialGradient(listOf(Color.White.copy(0.55f * gl), Color.White.copy(0.12f * gl)), center = center, radius = size.maxDimension * 0.7f),
                 cornerRadius = cr
             )
             // إطار لامع يدور ببطء: رأس لامع وذيل طويل يتلاشى بنعومة
@@ -290,7 +308,7 @@ fun Modifier.liveGlass(r: Dp, onClick: () -> Unit): Modifier {
             val w = 2.dp.toPx()
             drawRoundRect(Brush.sweepGradient(*stops, center = center), topLeft = Offset(w / 2f, w / 2f),
                 size = Size(size.width - w, size.height - w), cornerRadius = cr,
-                style = androidx.compose.ui.graphics.drawscope.Stroke(w), alpha = 0.8f + 0.2f * gd)
+                style = androidx.compose.ui.graphics.drawscope.Stroke(w), alpha = 0.8f + 0.2f * gl)
         }
         .clickable(interactionSource = src, indication = null, onClick = onClick)
 }
@@ -503,7 +521,7 @@ suspend fun probe(c: Channel): String = withContext(Dispatchers.IO) {
 }
 
 @Composable
-fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
+fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
     val ctx = LocalContext.current
     val act = ctx as Activity
     val store = remember { Store(ctx) }
@@ -709,6 +727,24 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
     }
 
     BackHandler(cur != null) { trace("BackHandler fired full=$full"); if (full) setFull(false) else close() }
+    // فتح الفيديو الشغال من إشعار التشغيل (التطبيق كان بالخلفية)
+    LaunchedEffect(openReq, player) {
+        if (openReq > 0 && player != null && cur == null && !closing &&
+            player.currentMediaItem != null && player.playbackState != Player.STATE_IDLE) {
+            val mi = player.currentMediaItem!!
+            val md = mi.mediaMetadata
+            val ch = Channel(md.title?.toString() ?: "بث مباشر", mi.localConfiguration?.uri?.toString() ?: "",
+                md.artworkUri?.toString() ?: "", Hdr.ref, Hdr.ua)
+            trace("resume video from notification: ${ch.name}")
+            error = null; qSel = null; vh = 0; ui = true; zoom = 1f; panX = 0f; panY = 0f
+            val dm = ctx.resources.displayMetrics
+            val cx = dm.widthPixels / 2f; val cy = dm.heightPixels / 2f
+            origin = Rect(cx - 80f, cy - 80f, cx + 80f, cy + 80f)
+            cur = ch
+            reveal.snapTo(0f)
+            reveal.animateTo(1f, tween(480, easing = FastOutSlowInEasing))
+        }
+    }
     LaunchedEffect(cur) { trace("cur changed -> ${cur?.name} reveal=${reveal.value}") }
     LaunchedEffect(inPip) { trace("inPip=$inPip") }
 
