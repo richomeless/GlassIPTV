@@ -382,6 +382,33 @@ val IVolLow = mkIcon("M7 9v6h4l5 5V4l-5 5H7z")
 val IVolMid = mkIcon("M18.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM5 9v6h4l5 5V4L9 9H5z")
 val IVolHigh = mkIcon("M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z")
 
+// إطار لامع يدور ببطء (نفس لمعة الأزرار الحية) بدون ضغط ولا تصغير، لعناصر مثل السلايدر
+@Composable
+fun Modifier.shimmerBorder(r: Dp): Modifier {
+    val ang by rememberInfiniteTransition(label = "rotB").animateFloat(
+        initialValue = 0f, targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(36000, easing = LinearEasing)), label = "angB"
+    )
+    return this.drawWithContent {
+        drawContent()
+        val t = ang / 360f
+        val n = 48
+        val stops = Array(n + 1) { i ->
+            val pos = i / n.toFloat()
+            var d = pos - t
+            if (d > 0.5f) d -= 1f
+            if (d < -0.5f) d += 1f
+            val u = if (d <= 0f) (1f + d / 0.30f).coerceIn(0f, 1f) else (1f - d / 0.08f).coerceIn(0f, 1f)
+            val k = u * u * (3f - 2f * u)
+            pos to Color(0.74f + 0.26f * k, 0.87f + 0.13f * k, 1f, k * k)
+        }
+        val w = 2.dp.toPx()
+        drawRoundRect(Brush.sweepGradient(*stops, center = center), topLeft = Offset(w / 2f, w / 2f),
+            size = Size(size.width - w, size.height - w), cornerRadius = CornerRadius(r.toPx()),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(w), alpha = 0.8f)
+    }
+}
+
 // سلايدر صوت زجاجي: يتحكم بصوت مشغّل التطبيق، ويتذكر آخر مستوى
 @Composable
 fun GlassVolume(player: Player, onTouch: () -> Unit, modifier: Modifier = Modifier) {
@@ -397,7 +424,7 @@ fun GlassVolume(player: Player, onTouch: () -> Unit, modifier: Modifier = Modifi
     fun save() { prefs.edit().putFloat("v", vol).apply() }
     androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides LayoutDirection.Ltr) {
         Row(
-            modifier.fillMaxWidth().height(52.dp).glass(18.dp).padding(horizontal = 16.dp),
+            modifier.fillMaxWidth().height(52.dp).glass(18.dp).shimmerBorder(18.dp).padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
