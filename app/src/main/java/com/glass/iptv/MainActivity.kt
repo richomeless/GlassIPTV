@@ -781,7 +781,7 @@ fun App(player: Player?, inPip: Boolean, onPip: () -> Unit) {
                             moveTo(hx, yb - tw / 2f)
                             quadraticBezierTo(hx - tl * 0.5f, yb - tw * 0.25f, hx - tl, yb)
                             quadraticBezierTo(hx - tl * 0.5f, yb + tw * 0.25f, hx, yb + tw / 2f)
-                            close()
+                            this.close()   // مهم: this عشان ما تنادي دالة close() حقت القناة
                         }
                         drawPath(taper(14.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc.copy(alpha = 0.05f), hc2.copy(alpha = 0.14f)), startX = hx - tl, endX = hx))
                         drawPath(taper(5.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc2.copy(alpha = 0.28f), Color.White.copy(alpha = 0.6f)), startX = hx - tl, endX = hx))
