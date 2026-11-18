@@ -1406,10 +1406,10 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     moved = true
                                     val vert = kotlin.math.abs(ay) > kotlin.math.abs(ax)
                                     val myTop = (zoom - 1f) * size.height / 2f
-                                    if (zoom <= 1f && full) {
+                                    if (zoom <= 1.02f && full) {
                                         // شاشة كاملة: السحب بأي اتجاه يلغيها ويرجع للبورتريه
                                         mode = 2
-                                    } else if (zoom <= 1f && vert) {
+                                    } else if (zoom <= 1.02f && vert) {
                                         if (!full && ay < 0f && !blockUp) mode = 1
                                         else if (!full && ay > 0f) mode = 3
                                     } else if (!full && ay > 0f && kotlin.math.abs(ay) > kotlin.math.abs(ax) * 0.7f) {
@@ -1427,7 +1427,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     else { fsDx = tot.x; fsDy = tot.y }
                                     fsDrag = 1f
                                     ch.consume()
-                                } else if (moved && zoom > 1f) {
+                                } else if (moved && zoom > 1.02f) {
                                     // تحريك الفيديو بعد الزوم
                                     val d = ch.position - lastPos
                                     // الفيديو يبقى في منتصف الشاشة عمودياً: تحريك أفقي فقط
@@ -1536,6 +1536,8 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     ch.consume()
                                 }
                             }
+                            // رجعنا تقريباً للحجم الطبيعي: نثبّته على 1 بالضبط عشان إيماءة الشاشة الكاملة ما تتعطل
+                            if (dragged && zoom < 1.05f) { zoom = 1f; panX = 0f; panY = 0f }
                             if (!dragged) {
                                 val z0 = zoom; val x0 = panX
                                 if (zoom > 1.02f) {
