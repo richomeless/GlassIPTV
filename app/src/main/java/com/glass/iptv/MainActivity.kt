@@ -637,21 +637,73 @@ class RevealShape(private val p: Float, private val o: Rect, private val corner:
 }
 
 @Composable
-fun Video(p: Player, modifier: Modifier = Modifier) {
+fun Video(p: Player, modifier: Modifier = Modifier, onView: ((PlayerView) -> Unit)? = null) {
     DisposableEffect(Unit) {
         trace("Video composed")
         onDispose { trace("Video DISPOSED") }
     }
-    VideoView(p, modifier)
+    VideoView(p, modifier, onView)
 }
 
 @Composable
-fun VideoView(p: Player, modifier: Modifier = Modifier) = AndroidView(
+fun VideoView(p: Player, modifier: Modifier = Modifier, onView: ((PlayerView) -> Unit)? = null) = AndroidView(
     // TextureView عشان الزوم والتدوير يشتغلون صح
-    factory = { c -> (LayoutInflater.from(c).inflate(R.layout.player_view, null, false) as PlayerView).apply { player = p } },
+    factory = { c -> (LayoutInflater.from(c).inflate(R.layout.player_view, null, false) as PlayerView).apply { player = p; post { onView?.invoke(this) } } },
     update = { it.player = p },
     modifier = modifier.fillMaxSize()
 )
+
+// إضاءة محيطية حول الفيديو: نأخذ إطار صغير جداً من الفيديو كل ~120ms، ننعّم ألوانه مع الإطار السابق،
+// ونرسمه مكبّراً ومموهاً خلف الفيديو فيطلع توهج بألوان المشهد حوالين الفيديو
+@Composable
+fun AmbientGlow(pv: PlayerView?, ar: Float, modifier: Modifier = Modifier) {
+    val gw = 16; val gh = 9
+    val bmp = remember { android.graphics.Bitmap.createBitmap(gw, gh, android.graphics.Bitmap.Config.ARGB_8888) }
+    val tmp = remember { android.graphics.Bitmap.createBitmap(gw, gh, android.graphics.Bitmap.Config.ARGB_8888) }
+    val img = remember { bmp.asImageBitmap() }
+    var tick by remember { mutableStateOf(0) }
+    val fx = remember { if (Build.VERSION.SDK_INT >= 31) frostEffect(70f) else null }
+    LaunchedEffect(pv) {
+        if (pv == null) return@LaunchedEffect
+        val acc = FloatArray(gw * gh * 3)
+        val px = IntArray(gw * gh)
+        var first = true
+        while (true) {
+            val tv = pv.videoSurfaceView as? android.view.TextureView
+            if (tv != null && tv.isAvailable && tv.width > 0 && tv.height > 0) {
+                val ok = try { tv.getBitmap(tmp); true } catch (_: Throwable) { false }
+                if (ok) {
+                    tmp.getPixels(px, 0, gw, 0, 0, gw, gh)
+                    val k = if (first) 1f else 0.35f   // تنعيم: الألوان تتغير بنعومة مو بقفزات
+                    first = false
+                    for (i in 0 until gw * gh) {
+                        val c = px[i]
+                        acc[i * 3] += (((c shr 16) and 255) - acc[i * 3]) * k
+                        acc[i * 3 + 1] += (((c shr 8) and 255) - acc[i * 3 + 1]) * k
+                        acc[i * 3 + 2] += ((c and 255) - acc[i * 3 + 2]) * k
+                        px[i] = (255 shl 24) or (acc[i * 3].toInt() shl 16) or (acc[i * 3 + 1].toInt() shl 8) or acc[i * 3 + 2].toInt()
+                    }
+                    bmp.setPixels(px, 0, gw, 0, 0, gw, gh)
+                    tick++
+                }
+            }
+            delay(120)
+        }
+    }
+    Box(modifier.fillMaxSize()
+        .graphicsLayer { renderEffect = fx }
+        .drawBehind {
+            tick   // قراءة الحالة عشان يعاد الرسم مع كل إطار جديد
+            val a = if (ar > 0f) ar else 16f / 9f
+            val rw: Float; val rh: Float
+            if (a > size.width / size.height) { rw = size.width; rh = size.width / a } else { rh = size.height; rw = size.height * a }
+            val gwid = rw * 1.25f; val ghei = rh * 1.6f
+            drawImage(img,
+                dstOffset = androidx.compose.ui.unit.IntOffset(((size.width - gwid) / 2f).toInt(), ((size.height - ghei) / 2f).toInt()),
+                dstSize = androidx.compose.ui.unit.IntSize(gwid.toInt(), ghei.toInt()),
+                alpha = 0.8f, filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
+        })
+}
 
 // اسم القناة للعرض: نشيل أي شي بين أقواس (1080p) أو [Not 24/7] ونخلي الاسم فقط
 private val tagRe = Regex("\\s*(\\([^)]*\\)|\\[[^\\]]*\\])")
@@ -788,6 +840,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
     val cfg = LocalConfiguration.current
     val winPortraitNow by rememberUpdatedState(cfg.orientation == Configuration.ORIENTATION_PORTRAIT)
     var vAr by remember { mutableStateOf(0f) }
+    var pvRef by remember { mutableStateOf<PlayerView?>(null) }
     val ctlRot by remember { derivedStateOf { fpNow() > 0.5f } }
     val chipX = remember { mutableStateMapOf<Int, Float>() }
     var dotLeft by remember { mutableStateOf(0f) }
@@ -1418,7 +1471,8 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                 translationY = (origin.center.y - size.height / 2f) * (1f - p) + dy
               }) {
                 player?.let {
-                    Video(it, Modifier.graphicsLayer {
+                    // نفس تحويل الفيديو (تدوير/تكبير/سحب) ينطبق على الإضاءة المحيطية
+                    val videoXf: androidx.compose.ui.graphics.GraphicsLayerScope.() -> Unit = {
                         val fp = fpNow()
                         val w = size.width; val h = size.height
                         val portrait = h > w
@@ -1431,7 +1485,9 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                         scaleX = k; scaleY = k
                         rotationZ = if (portrait) 90f * fp else 0f
                         translationX = panX + fsNowX(); translationY = panY + q * 0.4f * h + fsNowY()
-                    })
+                    }
+                    AmbientGlow(pvRef, vAr, Modifier.graphicsLayer(videoXf))
+                    Video(it, Modifier.graphicsLayer(videoXf), onView = { v -> pvRef = v })
                 }
                 // الأزرار تتدور مع الفيديو: نعيد ترتيبها بمقاس الشاشة بعد التدوير
                 Box(Modifier.fillMaxSize().layout { m, cs ->
