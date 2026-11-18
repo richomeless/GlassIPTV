@@ -725,6 +725,10 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
     val fullP = remember { Animatable(0f) }
     var fpDrag by remember { mutableStateOf(-1f) }   // أثناء السحب بالإصبع: تقدم الشاشة الكاملة الحي
     fun fpNow() = if (fpDrag >= 0f) fpDrag else fullP.value
+    // سحب للأسفل وهو بشاشة كاملة: الفيديو ينزل مع الإصبع، وعند الإفلات يلف ويصغر
+    var fsDrag by remember { mutableStateOf(-1f) }
+    val fsA = remember { Animatable(0f) }
+    fun fsNow() = if (fsDrag >= 0f) fsDrag else fsA.value
     // رمي الفيديو للأسفل (سحب للأسفل في البورتريه)
     val dismissA = remember { Animatable(0f) }
     var dismissDrag by remember { mutableStateOf(-1f) }
@@ -860,6 +864,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
         scope.launch {
             fullP.snapTo(p0); fpDrag = -1f
             fullP.animateTo(target, tween(if (target >= 1f) 320 else 380, easing = FastOutSlowInEasing))
+            buzz(hapticView, false)   // هزة عند اكتمال التكبير أو التصغير
         }
     }
 
@@ -1179,8 +1184,8 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                         else if (full && ay > 0f) mode = 2
                                         else if (!full && ay > 0f) mode = 3
                                     } else if (full && rot && zoom <= 1f && tot.y > 0f && kotlin.math.abs(tot.y) > kotlin.math.abs(tot.x) * 0.7f) {
-                                        // الجوال عمودي وشاشة كاملة: السحب للأسفل يصغّر الشاشة
-                                        mode = 2
+                                        // الجوال عمودي وشاشة كاملة: السحب للأسفل، الفيديو ينزل مع الإصبع وعند الإفلات يلف ويصغر
+                                        mode = 4
                                     } else if (!full && ay > 0f && kotlin.math.abs(ay) > kotlin.math.abs(ax) * 0.7f &&
                                         (zoom <= 1.15f || panY >= myTop - 6.dp.toPx())) {
                                         // سحب للأسفل شبه عمودي، أو الفيديو مقرّب وواصل لحافته العليا: نقبل الرمي
@@ -1190,6 +1195,9 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 if (mode == 3) {
                                     // سحب للأسفل في البورتريه: الفيديو ينزل مع الإصبع (حتى لو مقرّب)
                                     dismissDrag = ay.coerceAtLeast(0f)
+                                    ch.consume()
+                                } else if (mode == 4) {
+                                    fsDrag = tot.y.coerceAtLeast(0f)
                                     ch.consume()
                                 } else if (moved && zoom > 1f) {
                                     // تحريك الفيديو بعد الزوم
@@ -1206,6 +1214,22 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     ch.consume()
                                 }
                                 lastPos = ch.position
+                            }
+                            if (mode == 4) {
+                                val v = vt.calculateVelocity()
+                                val dyEnd = fsDrag.coerceAtLeast(0f)
+                                val exit = dyEnd > size.height * 0.12f || v.y > 900f
+                                scope.launch {
+                                    fsA.snapTo(dyEnd); fsDrag = -1f
+                                    if (exit) {
+                                        full = false; bars(true)
+                                        launch { fsA.animateTo(0f, tween(380, easing = FastOutSlowInEasing)) }
+                                        settleFull(1f, 0f)   // يلف ويصغر، وهزة عند الاكتمال
+                                    } else {
+                                        fsA.animateTo(0f, spring(dampingRatio = 0.7f, stiffness = 300f))
+                                    }
+                                }
+                                return@awaitEachGesture
                             }
                             if (mode == 3) {
                                 val v = vt.calculateVelocity()
@@ -1312,7 +1336,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                         val k = (1f + (sFull - 1f) * fp) * zoom * (1f - 0.15f * q)
                         scaleX = k; scaleY = k
                         rotationZ = if (portrait) 90f * fp else 0f
-                        translationX = panX; translationY = panY + q * 0.4f * h
+                        translationX = panX; translationY = panY + q * 0.4f * h + fsNow()
                     })
                 }
                 // الأزرار تتدور مع الفيديو: نعيد ترتيبها بمقاس الشاشة بعد التدوير
@@ -1334,7 +1358,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                             val fp = fpNow()
                     val steady = kotlin.math.max((1f - fp * 4f).coerceIn(0f, 1f), ((fp - 0.75f) * 4f).coerceIn(0f, 1f))
                     val dd = if (flying) 0f else (1f - dyNow() / (size.height * 0.1f)).coerceIn(0f, 1f)
-                    alpha = uiAlpha * ((reveal.value - 0.6f) / 0.4f).coerceIn(0f, 1f) * steady * dd
+                    alpha = uiAlpha * ((reveal.value - 0.6f) / 0.4f).coerceIn(0f, 1f) * steady * dd * (1f - fsNow() / (size.height * 0.1f)).coerceIn(0f, 1f)
                         }) {
                             Row(
                                 Modifier.align(Alignment.TopStart).graphicsLayer { translationY = -(1f - uiAlpha) * 28.dp.toPx() }
