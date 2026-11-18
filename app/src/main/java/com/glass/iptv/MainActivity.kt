@@ -245,6 +245,15 @@ fun frostEffect(radius: Float): androidx.compose.ui.graphics.RenderEffect {
     return android.graphics.RenderEffect.createChainEffect(sat, blur).asComposeRenderEffect()
 }
 
+// تمويه ناعم للإضاءة المحيطية: تمويه قوي، تشبع خفيف، وأطرافها تتلاشى
+@androidx.annotation.RequiresApi(31)
+fun ambientEffect(radius: Float): androidx.compose.ui.graphics.RenderEffect {
+    val cm = android.graphics.ColorMatrix().apply { setSaturation(1.1f) }
+    val sat = android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(cm))
+    val blur = android.graphics.RenderEffect.createBlurEffect(radius, radius, android.graphics.Shader.TileMode.DECAL)
+    return android.graphics.RenderEffect.createChainEffect(sat, blur).asComposeRenderEffect()
+}
+
 fun Modifier.glass(r: Dp = 24.dp, clipContent: Boolean = true): Modifier {
     val shape = RoundedCornerShape(r)
     val m = if (clipContent) this.clip(shape) else this
@@ -662,7 +671,7 @@ fun AmbientGlow(pv: PlayerView?, ar: Float, modifier: Modifier = Modifier) {
     val tmp = remember { android.graphics.Bitmap.createBitmap(gw, gh, android.graphics.Bitmap.Config.ARGB_8888) }
     val img = remember { bmp.asImageBitmap() }
     var tick by remember { mutableStateOf(0) }
-    val fx = remember { if (Build.VERSION.SDK_INT >= 31) frostEffect(70f) else null }
+    val fx = remember { if (Build.VERSION.SDK_INT >= 31) ambientEffect(160f) else null }
     LaunchedEffect(pv) {
         if (pv == null) return@LaunchedEffect
         val acc = FloatArray(gw * gh * 3)
@@ -697,11 +706,11 @@ fun AmbientGlow(pv: PlayerView?, ar: Float, modifier: Modifier = Modifier) {
             val a = if (ar > 0f) ar else 16f / 9f
             val rw: Float; val rh: Float
             if (a > size.width / size.height) { rw = size.width; rh = size.width / a } else { rh = size.height; rw = size.height * a }
-            val gwid = rw * 1.25f; val ghei = rh * 1.6f
+            val gwid = rw * 1.06f; val ghei = rh * 1.18f
             drawImage(img,
                 dstOffset = androidx.compose.ui.unit.IntOffset(((size.width - gwid) / 2f).toInt(), ((size.height - ghei) / 2f).toInt()),
                 dstSize = androidx.compose.ui.unit.IntSize(gwid.toInt(), ghei.toInt()),
-                alpha = 0.8f, filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
+                alpha = 0.38f, filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
         })
 }
 
