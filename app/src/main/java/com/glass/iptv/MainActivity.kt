@@ -726,9 +726,14 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
     var fpDrag by remember { mutableStateOf(-1f) }   // أثناء السحب بالإصبع: تقدم الشاشة الكاملة الحي
     fun fpNow() = if (fpDrag >= 0f) fpDrag else fullP.value
     // سحب للأسفل وهو بشاشة كاملة: الفيديو ينزل مع الإصبع، وعند الإفلات يلف ويصغر
-    var fsDrag by remember { mutableStateOf(-1f) }
+    // الفيديو يلحق الإصبع (لأعلى أو لأسفل أو لليسار) وعند الإفلات يكمل التكبير أو التصغير
+    var fsDrag by remember { mutableStateOf(-1f) }      // >=0 أثناء السحب
+    var fsDx by remember { mutableStateOf(0f) }
+    var fsDy by remember { mutableStateOf(0f) }
+    val fsAx = remember { Animatable(0f) }
     val fsA = remember { Animatable(0f) }
-    fun fsNow() = if (fsDrag >= 0f) fsDrag else fsA.value
+    fun fsNowX() = if (fsDrag >= 0f) fsDx else fsAx.value
+    fun fsNowY() = if (fsDrag >= 0f) fsDy else fsA.value
     // رمي الفيديو للأسفل (سحب للأسفل في البورتريه)
     val dismissA = remember { Animatable(0f) }
     var dismissDrag by remember { mutableStateOf(-1f) }
@@ -1196,8 +1201,14 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     // سحب للأسفل في البورتريه: الفيديو ينزل مع الإصبع (حتى لو مقرّب)
                                     dismissDrag = ay.coerceAtLeast(0f)
                                     ch.consume()
-                                } else if (mode == 4) {
-                                    fsDrag = tot.y.coerceAtLeast(0f)
+                                } else if (mode == 1 || mode == 2 || mode == 4) {
+                                    // الفيديو يلحق إصبعك بنفس الاتجاه
+                                    when (mode) {
+                                        1 -> fsDy = tot.y.coerceAtMost(0f)
+                                        4 -> fsDy = tot.y.coerceAtLeast(0f)
+                                        else -> if (rot) fsDx = tot.x.coerceAtMost(0f) else fsDy = tot.y.coerceAtLeast(0f)
+                                    }
+                                    fsDrag = 1f
                                     ch.consume()
                                 } else if (moved && zoom > 1f) {
                                     // تحريك الفيديو بعد الزوم
@@ -1215,17 +1226,25 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 }
                                 lastPos = ch.position
                             }
-                            if (mode == 4) {
+                            if (mode == 1 || mode == 2 || mode == 4) {
                                 val v = vt.calculateVelocity()
-                                val dyEnd = fsDrag.coerceAtLeast(0f)
-                                val exit = dyEnd > size.height * 0.12f || v.y > 900f
+                                val leftSwipe = mode == 2 && full && size.height > size.width
+                                val disp = if (leftSwipe) -fsDx else if (mode == 1) -fsDy else fsDy
+                                val thr = (if (leftSwipe) size.width else size.height) * 0.12f
+                                val vel = if (leftSwipe) -v.x else if (mode == 1) -v.y else v.y
+                                val go = disp > thr || vel > 900f
+                                val enter = mode == 1
                                 scope.launch {
-                                    fsA.snapTo(dyEnd); fsDrag = -1f
-                                    if (exit) {
-                                        full = false; bars(true)
-                                        launch { fsA.animateTo(0f, tween(380, easing = FastOutSlowInEasing)) }
-                                        settleFull(1f, 0f)   // يلف ويصغر، وهزة عند الاكتمال
+                                    fsAx.snapTo(fsDx); fsA.snapTo(fsDy)
+                                    fsDrag = -1f; fsDx = 0f; fsDy = 0f
+                                    if (go) {
+                                        full = enter; bars(!enter)
+                                        launch { fsAx.animateTo(0f, tween(360, easing = FastOutSlowInEasing)) }
+                                        launch { fsA.animateTo(0f, tween(360, easing = FastOutSlowInEasing)) }
+                                        // يلف ويكبر أو يصغر، وهزة عند الاكتمال
+                                        settleFull(if (enter) 0f else 1f, if (enter) 1f else 0f)
                                     } else {
+                                        launch { fsAx.animateTo(0f, spring(dampingRatio = 0.7f, stiffness = 300f)) }
                                         fsA.animateTo(0f, spring(dampingRatio = 0.7f, stiffness = 300f))
                                     }
                                 }
@@ -1336,7 +1355,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                         val k = (1f + (sFull - 1f) * fp) * zoom * (1f - 0.15f * q)
                         scaleX = k; scaleY = k
                         rotationZ = if (portrait) 90f * fp else 0f
-                        translationX = panX; translationY = panY + q * 0.4f * h + fsNow()
+                        translationX = panX + fsNowX(); translationY = panY + q * 0.4f * h + fsNowY()
                     })
                 }
                 // الأزرار تتدور مع الفيديو: نعيد ترتيبها بمقاس الشاشة بعد التدوير
@@ -1358,7 +1377,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                             val fp = fpNow()
                     val steady = kotlin.math.max((1f - fp * 4f).coerceIn(0f, 1f), ((fp - 0.75f) * 4f).coerceIn(0f, 1f))
                     val dd = if (flying) 0f else (1f - dyNow() / (size.height * 0.1f)).coerceIn(0f, 1f)
-                    alpha = uiAlpha * ((reveal.value - 0.6f) / 0.4f).coerceIn(0f, 1f) * steady * dd * (1f - fsNow() / (size.height * 0.1f)).coerceIn(0f, 1f)
+                    alpha = uiAlpha * ((reveal.value - 0.6f) / 0.4f).coerceIn(0f, 1f) * steady * dd * (1f - kotlin.math.sqrt(fsNowX() * fsNowX() + fsNowY() * fsNowY()) / (size.height * 0.1f)).coerceIn(0f, 1f)
                         }) {
                             Row(
                                 Modifier.align(Alignment.TopStart).graphicsLayer { translationY = -(1f - uiAlpha) * 28.dp.toPx() }
