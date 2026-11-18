@@ -666,37 +666,62 @@ fun VideoView(p: Player, modifier: Modifier = Modifier, onView: ((PlayerView) ->
 // ونرسمه مكبّراً ومموهاً خلف الفيديو فيطلع توهج بألوان المشهد حوالين الفيديو
 @Composable
 fun AmbientGlow(pv: PlayerView?, ar: Float, modifier: Modifier = Modifier) {
-    val gw = 16; val gh = 9
+    val gw = 16; val gh = 9      // حجم الشبكة اللي نرسمها
+    val sw = 80; val sh = 45     // حجم السحب من الفيديو (5x5 بكسل لكل خانة) لتجنب الوميض من أخذ عينات قليلة
     val bmp = remember { android.graphics.Bitmap.createBitmap(gw, gh, android.graphics.Bitmap.Config.ARGB_8888) }
-    val tmp = remember { android.graphics.Bitmap.createBitmap(gw, gh, android.graphics.Bitmap.Config.ARGB_8888) }
+    val tmp = remember { android.graphics.Bitmap.createBitmap(sw, sh, android.graphics.Bitmap.Config.ARGB_8888) }
     val img = remember { bmp.asImageBitmap() }
     var tick by remember { mutableStateOf(0) }
     val fx = remember { if (Build.VERSION.SDK_INT >= 31) ambientEffect(160f) else null }
     LaunchedEffect(pv) {
         if (pv == null) return@LaunchedEffect
-        val acc = FloatArray(gw * gh * 3)
+        val target = FloatArray(gw * gh * 3)
+        val cur = FloatArray(gw * gh * 3)
+        val raw = IntArray(sw * sh)
         val px = IntArray(gw * gh)
-        var first = true
-        while (true) {
-            val tv = pv.videoSurfaceView as? android.view.TextureView
-            if (tv != null && tv.isAvailable && tv.width > 0 && tv.height > 0) {
-                val ok = try { tv.getBitmap(tmp); true } catch (_: Throwable) { false }
-                if (ok) {
-                    tmp.getPixels(px, 0, gw, 0, 0, gw, gh)
-                    val k = if (first) 1f else 0.35f   // تنعيم: الألوان تتغير بنعومة مو بقفزات
-                    first = false
-                    for (i in 0 until gw * gh) {
-                        val c = px[i]
-                        acc[i * 3] += (((c shr 16) and 255) - acc[i * 3]) * k
-                        acc[i * 3 + 1] += (((c shr 8) and 255) - acc[i * 3 + 1]) * k
-                        acc[i * 3 + 2] += ((c and 255) - acc[i * 3 + 2]) * k
-                        px[i] = (255 shl 24) or (acc[i * 3].toInt() shl 16) or (acc[i * 3 + 1].toInt() shl 8) or acc[i * 3 + 2].toInt()
+        var have = false
+        // 1) سحب الألوان من الفيديو ~7 مرات بالثانية (متوسط كل 5x5 بكسل)
+        launch {
+            val bw = sw / gw; val bh = sh / gh
+            while (true) {
+                val tv = pv.videoSurfaceView as? android.view.TextureView
+                if (tv != null && tv.isAvailable && tv.width > 0 && tv.height > 0) {
+                    val ok = try { tv.getBitmap(tmp); true } catch (_: Throwable) { false }
+                    if (ok) {
+                        tmp.getPixels(raw, 0, sw, 0, 0, sw, sh)
+                        for (gy in 0 until gh) for (gx in 0 until gw) {
+                            var r = 0f; var g = 0f; var b = 0f
+                            for (yy in 0 until bh) for (xx in 0 until bw) {
+                                val c = raw[(gy * bh + yy) * sw + gx * bw + xx]
+                                r += (c shr 16) and 255; g += (c shr 8) and 255; b += c and 255
+                            }
+                            val n = (bw * bh).toFloat(); val o = (gy * gw + gx) * 3
+                            target[o] = r / n; target[o + 1] = g / n; target[o + 2] = b / n
+                        }
+                        if (!have) { System.arraycopy(target, 0, cur, 0, cur.size); have = true }
                     }
-                    bmp.setPixels(px, 0, gw, 0, 0, gw, gh)
-                    tick++
                 }
+                delay(140)
             }
-            delay(120)
+        }
+        // 2) كل فريم (30fps) نقرّب الألوان الحالية من الهدف بنعومة، حتى تكون الحركة مايعة بدون قفزات
+        var last = 0L
+        while (true) {
+            val t = androidx.compose.runtime.withFrameNanos { it }
+            if (last == 0L) { last = t; continue }
+            val dt = (t - last) / 1e9f
+            if (dt < 0.033f || !have) continue
+            last = t
+            val k = 1f - kotlin.math.exp(-dt / 0.5f)   // ثابت زمني 0.5 ثانية
+            for (i in 0 until gw * gh) {
+                val o = i * 3
+                cur[o] += (target[o] - cur[o]) * k
+                cur[o + 1] += (target[o + 1] - cur[o + 1]) * k
+                cur[o + 2] += (target[o + 2] - cur[o + 2]) * k
+                px[i] = (255 shl 24) or (cur[o].toInt() shl 16) or (cur[o + 1].toInt() shl 8) or cur[o + 2].toInt()
+            }
+            bmp.setPixels(px, 0, gw, 0, 0, gw, gh)
+            tick++
         }
     }
     Box(modifier.fillMaxSize()
