@@ -1176,9 +1176,11 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     val myTop = (zoom - 1f) * size.height / 2f
                                     if (zoom <= 1f && vert) {
                                         if (!full && ay < 0f && !blockUp) mode = 1
-                                        // في الشاشة الكاملة (الفيديو مدوّر): السحب يميناً أو يساراً يصغّر الشاشة
-                                        else if (full && (ay > 0f || rot)) mode = 2
+                                        else if (full && ay > 0f) mode = 2
                                         else if (!full && ay > 0f) mode = 3
+                                    } else if (full && rot && zoom <= 1f && tot.y > 0f && kotlin.math.abs(tot.y) > kotlin.math.abs(tot.x) * 0.7f) {
+                                        // الجوال عمودي وشاشة كاملة: السحب للأسفل يصغّر الشاشة
+                                        mode = 2
                                     } else if (!full && ay > 0f && kotlin.math.abs(ay) > kotlin.math.abs(ax) * 0.7f &&
                                         (zoom <= 1.15f || panY >= myTop - 6.dp.toPx())) {
                                         // سحب للأسفل شبه عمودي، أو الفيديو مقرّب وواصل لحافته العليا: نقبل الرمي
@@ -1199,7 +1201,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     ch.consume()
                                 } else if (mode != 0) {
                                     // الفيديو يتحرك مع الإصبع حي
-                                    prog = if (mode == 1) (-ay / dist).coerceIn(0f, 1f) else 1f - ((if (rot) kotlin.math.abs(ay) else ay) / dist).coerceIn(0f, 1f)
+                                    prog = if (mode == 1) (-ay / dist).coerceIn(0f, 1f) else 1f - ((if (rot) maxOf(ay, tot.y) else ay) / dist).coerceIn(0f, 1f)
                                     fpDrag = prog
                                     ch.consume()
                                 }
@@ -1231,7 +1233,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 // عند الإفلات: نكمل للنهاية أو نرجع حسب المسافة والسرعة
                                 val v = vt.calculateVelocity()
                                 val rot = full && size.height > size.width
-                                val vy = if (rot) (if (mode == 2) kotlin.math.abs(v.x) else -v.x) else v.y
+                                val vy = if (rot) (if (mode == 2) maxOf(-v.x, v.y) else -v.x) else v.y
                                 val target = when {
                                     vy < -1200f -> 1f
                                     vy > 1200f -> 0f
