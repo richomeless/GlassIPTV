@@ -652,6 +652,46 @@ fun VideoView(p: Player, modifier: Modifier = Modifier) = AndroidView(
     modifier = modifier.fillMaxSize()
 )
 
+// يجهّز شعار القناة كصورة مربعة (شعار كامل بدون قص) لإشعار التشغيل والجزيرة، بخلفية داكنة أو فاتحة حسب لون الشعار
+fun fitLogo(u: String): ByteArray? {
+    return try {
+        val c = URL(u).openConnection() as HttpURLConnection
+        c.connectTimeout = 8000; c.readTimeout = 8000
+        c.setRequestProperty("User-Agent", "Mozilla/5.0")
+        val raw = c.inputStream.use { it.readBytes() }
+        c.disconnect()
+        if (raw.isEmpty() || raw.size > 4_000_000) return null
+        val src = android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.size) ?: return null
+        val size = 512
+        // متوسط سطوع الأجزاء الظاهرة من الشعار: الشعار الغامق ياخذ خلفية فاتحة
+        val small = android.graphics.Bitmap.createScaledBitmap(src, 24, 24, true)
+        var sum = 0.0; var cnt = 0
+        for (y in 0 until 24) for (x in 0 until 24) {
+            val px = small.getPixel(x, y)
+            if ((px ushr 24) > 40) {
+                sum += (0.299 * ((px shr 16) and 255) + 0.587 * ((px shr 8) and 255) + 0.114 * (px and 255)) / 255.0
+                cnt++
+            }
+        }
+        val lum = if (cnt > 0) sum / cnt else 0.5
+        val bg = if (lum < 0.30) 0xFFF2F2F7.toInt() else 0xFF1C1C1E.toInt()
+        val out = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+        val cv = android.graphics.Canvas(out)
+        cv.drawColor(bg)
+        val w = src.width.toFloat(); val h = src.height.toFloat()
+        val diag = kotlin.math.sqrt(w * w + h * h)
+        // الشعار كامل داخل الدائرة المحيطة بالمربع، بهامش حوله
+        val sc = minOf(0.82f * size / w, 0.82f * size / h, 0.92f * size / diag)
+        val dw = w * sc; val dh = h * sc
+        val l = (size - dw) / 2f; val t = (size - dh) / 2f
+        cv.drawBitmap(src, null, android.graphics.RectF(l, t, l + dw, t + dh),
+            android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG or android.graphics.Paint.ANTI_ALIAS_FLAG))
+        val bos = java.io.ByteArrayOutputStream()
+        out.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bos)
+        bos.toByteArray()
+    } catch (_: Throwable) { null }
+}
+
 val logoRe = Regex("tvg-logo=\"([^\"]*)\"")
 
 fun loadPlaylist(u: String): List<Channel> {
@@ -843,6 +883,15 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                 }.build())
             if (c.url.contains(".m3u8")) b.setMimeType(MimeTypes.APPLICATION_M3U8)
             p.setMediaItem(b.build()); p.prepare(); p.play()
+            // بعد ما يشتغل البث: نبدّل الشعار بنسخة مربعة كاملة (بدون إيقاف التشغيل)
+            if (c.logo.startsWith("http")) scope.launch {
+                val bytes = withContext(Dispatchers.IO) { fitLogo(c.logo) } ?: return@launch
+                val item = p.currentMediaItem ?: return@launch
+                if (item.localConfiguration?.uri?.toString() != c.url) return@launch   // القناة تغيّرت
+                val md = item.mediaMetadata.buildUpon()
+                    .setArtworkData(bytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER).build()
+                p.replaceMediaItem(p.currentMediaItemIndex, item.buildUpon().setMediaMetadata(md).build())
+            }
         }
     }
 
