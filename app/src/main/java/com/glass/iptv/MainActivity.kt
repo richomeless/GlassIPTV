@@ -718,7 +718,11 @@ fun AmbientGlow(pv: PlayerView?, ar: Float, modifier: Modifier = Modifier) {
                 cur[o] += (target[o] - cur[o]) * k
                 cur[o + 1] += (target[o + 1] - cur[o + 1]) * k
                 cur[o + 2] += (target[o + 2] - cur[o + 2]) * k
-                px[i] = (255 shl 24) or (cur[o].toInt() shl 16) or (cur[o + 1].toInt() shl 8) or cur[o + 2].toInt()
+                // الخانات الداكنة تتلاشى (شفافية) بدل ما نرسمها: كذا ما تبين مربعات/تدرجات متقطعة في المشاهد الداكنة
+                val l = 0.2126f * cur[o] + 0.7152f * cur[o + 1] + 0.0722f * cur[o + 2]
+                val tt = ((l - 14f) / 34f).coerceIn(0f, 1f)
+                val al = (tt * tt * (3f - 2f * tt) * 255f).toInt()
+                px[i] = (al shl 24) or (cur[o].toInt() shl 16) or (cur[o + 1].toInt() shl 8) or cur[o + 2].toInt()
             }
             bmp.setPixels(px, 0, gw, 0, 0, gw, gh)
             tick++
@@ -731,11 +735,11 @@ fun AmbientGlow(pv: PlayerView?, ar: Float, modifier: Modifier = Modifier) {
             val a = if (ar > 0f) ar else 16f / 9f
             val rw: Float; val rh: Float
             if (a > size.width / size.height) { rw = size.width; rh = size.width / a } else { rh = size.height; rw = size.height * a }
-            val gwid = rw * 1.06f; val ghei = rh * 1.18f
+            val gwid = rw * 1.08f; val ghei = rh * 1.2f
             drawImage(img,
                 dstOffset = androidx.compose.ui.unit.IntOffset(((size.width - gwid) / 2f).toInt(), ((size.height - ghei) / 2f).toInt()),
                 dstSize = androidx.compose.ui.unit.IntSize(gwid.toInt(), ghei.toInt()),
-                alpha = 0.38f, filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
+                alpha = 0.5f, filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
         })
 }
 
