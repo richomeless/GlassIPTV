@@ -1559,6 +1559,8 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     val my = (zoom - 1f) * size.height / 2f
                                     panX = (panX + d.x).coerceIn(-mx, mx)
                                     panY = (panY + d.y).coerceIn(-my, my)
+                                    // الفيديو يبقى مسنتر عمودياً دائماً (في الشاشة الكاملة المقلوبة المحور العمودي للصورة هو أفقي للجهاز)
+                                    if (rot) panX = 0f else panY = 0f
                                     ch.consume()
                                 } else if (mode != 0) {
                                     // الفيديو يتحرك مع الإصبع حي
@@ -1657,6 +1659,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     val mx = (zoom - 1f) * size.width / 2f
                                     val my = (zoom - 1f) * size.height / 2f
                                     panX = panX.coerceIn(-mx, mx); panY = panY.coerceIn(-my, my)
+                                    if (full && size.height > size.width) panX = 0f else panY = 0f   // مسنتر دائماً
                                     ch.consume()
                                 }
                             }
