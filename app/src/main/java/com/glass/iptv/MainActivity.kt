@@ -931,6 +931,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
     fun setFull(on: Boolean) {
         if (on == full) return
         full = on
+        if (on) ui = false   // عند التكبير الأزرار وسلايدر الصوت تنخفي حتى لو كانت ظاهرة
         bars(!on)
         settleFull(fpNow(), if (on) 1f else 0f)
     }
@@ -1311,6 +1312,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     fsDrag = -1f; fsDx = 0f; fsDy = 0f
                                     if (go) {
                                         full = enter; bars(!enter)
+                                        if (enter) ui = false   // التكبير بالسحب: نخفي الأزرار والصوت
                                         launch { fsAx.animateTo(0f, tween(360, easing = FastOutSlowInEasing)) }
                                         launch { fsA.animateTo(0f, tween(360, easing = FastOutSlowInEasing)) }
                                         // يلف ويكبر أو يصغر، وهزة عند الاكتمال
@@ -1355,6 +1357,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     else -> if (prog > 0.5f) 1f else 0f
                                 }
                                 full = target == 1f
+                                if (full) ui = false
                                 bars(target == 0f)
                                 settleFull(prog, target)
                                 return@awaitEachGesture
