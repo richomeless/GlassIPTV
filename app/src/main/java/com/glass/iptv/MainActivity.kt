@@ -1680,7 +1680,8 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     val dw: Float; val dh: Float
                                     if (sh > sw) { dw = sw; dh = if (full) minOf(sh, sw * ar) else minOf(sh, sw / ar) }
                                     else if (ar > sw / sh) { dw = sw; dh = sw / ar } else { dh = sh; dw = sh * ar }
-                                    val target = maxOf(sw / dw, sh / dh).coerceIn(1f, 4f)
+                                    val cover = maxOf(sw / dw, sh / dh).coerceIn(1f, 4f)
+                                    val target = 1f + (cover - 1f) * 0.5f   // نصف مقدار التكبير الكامل
                                     if (target > 1.05f) {
                                         buzz(hapticView, false)
                                         scope.launch {
