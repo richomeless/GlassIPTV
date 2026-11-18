@@ -108,7 +108,6 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.common.Timeline
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
@@ -139,13 +138,17 @@ class Store(ctx: Context) {
     fun names(): Map<String, String> = (p.getString("pn", "") ?: "").split("\n").filter { it.contains("\t") }
         .associate { val i = it.indexOf('\t'); it.substring(0, i) to it.substring(i + 1) }
     fun saveNames(m: Map<String, String>) = p.edit().putString("pn", m.entries.joinToString("\n") { "${it.key}\t${it.value}" }).apply()
-    fun pipMode(): Boolean = p.getBoolean("pip", true)
-    fun setPipMode(b: Boolean) = p.edit().putBoolean("pip", b).apply()
-    // ترتيب القنوات: 0 الأصلي، 1 أبجدي، 2 حسب آخر ما شُغّل
     fun sortMode(): Int = p.getInt("sort", 0)
     fun setSortMode(m: Int) = p.edit().putInt("sort", m).apply()
-    fun recents(): List<String> = (p.getString("recent", "") ?: "").split("\n").filter { it.isNotBlank() }
-    fun saveRecents(l: List<String>) = p.edit().putString("recent", l.joinToString("\n")).apply()
+    fun recents(): Map<String, Long> = (p.getString("rec", "") ?: "").split("\n").filter { it.contains("\t") }
+        .mapNotNull { line -> val i = line.indexOf('\t'); line.substring(i + 1).toLongOrNull()?.let { t -> line.substring(0, i) to t } }.toMap()
+    fun touchRecent(url: String) {
+        val m = recents().toMutableMap(); m[url] = System.currentTimeMillis()
+        val keep = m.entries.sortedByDescending { it.value }.take(400)
+        p.edit().putString("rec", keep.joinToString("\n") { "${it.key}\t${it.value}" }).apply()
+    }
+    fun pipMode(): Boolean = p.getBoolean("pip", true)
+    fun setPipMode(b: Boolean) = p.edit().putBoolean("pip", b).apply()
     fun favs(): List<Channel> = (p.getString("fav", "") ?: "").split("\n").filter { it.isNotBlank() }.map {
         val f = it.split("\t")
         Channel(f[0], f.getOrElse(1) { "" }, f.getOrElse(2) { "" }, f.getOrElse(3) { "" }, f.getOrElse(4) { "" })
@@ -450,7 +453,7 @@ fun Modifier.shimmerBorder(r: Dp): Modifier {
 
 // سلايدر صوت زجاجي: يتحكم بصوت مشغّل التطبيق، ويتذكر آخر مستوى
 @Composable
-fun GlassVolume(player: Player, onTouch: () -> Unit, modifier: Modifier = Modifier, showValue: Boolean = true) {
+fun GlassVolume(player: Player, onTouch: () -> Unit, modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
     val prefs = remember { ctx.getSharedPreferences("glass_volume", Context.MODE_PRIVATE) }
     var vol by remember(player) { mutableFloatStateOf(player.volume.coerceIn(0f, 1f)) }
@@ -463,7 +466,7 @@ fun GlassVolume(player: Player, onTouch: () -> Unit, modifier: Modifier = Modifi
     fun save() { prefs.edit().putFloat("v", vol).apply() }
     androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides LayoutDirection.Ltr) {
         Row(
-            modifier.fillMaxWidth().height(52.dp).glass(18.dp).shimmerBorder(18.dp).padding(horizontal = if (showValue) 16.dp else 12.dp),
+            modifier.fillMaxWidth().height(52.dp).glass(18.dp).shimmerBorder(18.dp).padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
@@ -501,141 +504,10 @@ fun GlassVolume(player: Player, onTouch: () -> Unit, modifier: Modifier = Modifi
                     drawCircle(Color.White, radius = r * 0.75f, center = Offset(x, cy))
                 }
             }
-            if (showValue) {
-                Spacer(Modifier.width(12.dp))
-                Text("${(vol * 100).toInt()}", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(30.dp), textAlign = TextAlign.End)
-            }
+            Spacer(Modifier.width(12.dp))
+            Text("${(vol * 100).toInt()}", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(30.dp), textAlign = TextAlign.End)
         }
     }
-}
-
-val ISort = mkIcon("M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z")
-
-private val seekWin = Timeline.Window()
-
-// مدى الترجيع المتاح (بالملّي ثانية): من أقدم نقطة متاحة في البث إلى الحافة المباشرة (أو نهاية الفيديو). 0 = غير قابل للتحريك
-private fun seekRange(p: Player): Long {
-    if (!p.isCurrentMediaItemSeekable) return 0L
-    val tl = p.currentTimeline
-    if (tl.isEmpty) return 0L
-    val i = p.currentMediaItemIndex
-    if (i < 0 || i >= tl.windowCount) return 0L
-    val w = tl.getWindow(i, seekWin)
-    val dur = w.durationMs
-    val edge = if (w.isDynamic && w.defaultPositionMs > 0L) w.defaultPositionMs else dur
-    return if (edge == C.TIME_UNSET || edge < 0L) 0L else edge
-}
-
-private fun fmtTime(ms: Long): String {
-    val s = (ms / 1000L).coerceAtLeast(0L)
-    val h = s / 3600L; val m = (s % 3600L) / 60L; val ss = s % 60L
-    return if (h > 0) String.format(java.util.Locale.US, "%d:%02d:%02d", h, m, ss)
-    else String.format(java.util.Locale.US, "%d:%02d", m, ss)
-}
-
-// سلايدر التقديم والترجيع: اليسار = أقدم نقطة متاحة، اليمين = المباشر. عند الوصول لأقصى حد للترجيع نستدعي onLimit (ارتداد الشاشة)
-@Composable
-fun GlassSeek(player: Player, onTouch: () -> Unit, onLimit: () -> Unit, onUnsupported: () -> Unit, modifier: Modifier = Modifier) {
-    var range by remember(player) { mutableLongStateOf(0L) }
-    var pos by remember(player) { mutableLongStateOf(0L) }
-    var live by remember(player) { mutableStateOf(false) }
-    var drag by remember { mutableFloatStateOf(-1f) }   // >= 0 أثناء السحب
-    LaunchedEffect(player) {
-        while (true) {
-            range = seekRange(player)
-            pos = player.currentPosition
-            live = player.isCurrentMediaItemLive
-            delay(250)
-        }
-    }
-    fun commit(f: Float) {
-        if (range <= 0L) return
-        val x = f.coerceIn(0f, 1f)
-        if (live && x >= 0.98f) player.seekToDefaultPosition() else player.seekTo((x * range).toLong())
-        pos = (x * range).toLong()
-    }
-    val can = range > 0L
-    val shown = if (drag >= 0f) drag else if (can) (pos.toFloat() / range).coerceIn(0f, 1f) else 1f
-    val label = if (!can) "مباشر" else {
-        val at = if (drag >= 0f) (drag * range).toLong() else pos
-        val behind = (range - at).coerceAtLeast(0L)
-        if (live) { if (behind < 3000L) "مباشر" else "-" + fmtTime(behind) } else fmtTime(at)
-    }
-    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides LayoutDirection.Ltr) {
-        Row(
-            modifier.fillMaxWidth().height(52.dp).glass(18.dp).shimmerBorder(18.dp).padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                Modifier.weight(1f).fillMaxHeight()
-                    .pointerInput(player) {
-                        val r = 10.dp.toPx()
-                        fun frac(x: Float) = ((x - r) / (size.width - 2f * r).coerceAtLeast(1f)).coerceIn(0f, 1f)
-                        detectTapGestures { o ->
-                            onTouch()
-                            if (range <= 0L) onUnsupported() else commit(frac(o.x))
-                        }
-                    }
-                    .pointerInput(player) {
-                        val r = 10.dp.toPx()
-                        var fired = false
-                        fun raw(x: Float) = (x - r) / (size.width - 2f * r).coerceAtLeast(1f)
-                        detectHorizontalDragGestures(
-                            onDragStart = { o ->
-                                onTouch(); fired = false
-                                if (range <= 0L) onUnsupported() else drag = raw(o.x).coerceIn(0f, 1f)
-                            },
-                            onDragEnd = { if (drag >= 0f) commit(drag); drag = -1f },
-                            onDragCancel = { drag = -1f }
-                        ) { ch, _ ->
-                            ch.consume(); onTouch()
-                            if (range > 0L) {
-                                val fr = raw(ch.position.x)
-                                drag = fr.coerceIn(0f, 1f)
-                                // وصلنا لأقدم نقطة متاحة: ارتداد الشاشة (مرة واحدة لكل وصول)
-                                if (fr <= 0f && !fired) { fired = true; onLimit() }
-                                else if (fr > 0.08f) fired = false
-                            }
-                        }
-                    }
-            ) {
-                androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
-                    val r = 10.dp.toPx()
-                    val th = 6.dp.toPx()
-                    val cy = size.height / 2f
-                    val x = r + shown * (size.width - 2f * r)
-                    val a = if (can) 1f else 0.45f
-                    drawRoundRect(Color.White.copy(0.20f * a), Offset(r, cy - th / 2f), Size(size.width - 2f * r, th), CornerRadius(th / 2f))
-                    if (x > r) drawRoundRect(
-                        Brush.horizontalGradient(listOf(Color(0xFFA9D2FF).copy(a), Color.White.copy(a)), startX = r, endX = x.coerceAtLeast(r + 1f)),
-                        Offset(r, cy - th / 2f), Size(x - r, th), CornerRadius(th / 2f)
-                    )
-                    drawCircle(Brush.radialGradient(listOf(Color.White.copy(0.55f * a), Color.Transparent), center = Offset(x, cy), radius = r * 2f), radius = r * 2f, center = Offset(x, cy))
-                    drawCircle(Color.White.copy(a), radius = r * 0.75f, center = Offset(x, cy))
-                }
-            }
-            Spacer(Modifier.width(10.dp))
-            Text(label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-                modifier = Modifier.widthIn(min = 48.dp), textAlign = TextAlign.End)
-        }
-    }
-}
-
-// ترتيب القنوات حسب الوضع، والقنوات بدون لوقو دايماً في آخر القائمة (الترتيب ثابت فيحافظ على الترتيب الداخلي)
-fun arrange(list: List<Channel>, mode: Int, recent: List<String>): List<Channel> {
-    val ordered = when (mode) {
-        1 -> {
-            val col = java.text.Collator.getInstance().apply { strength = java.text.Collator.PRIMARY }
-            list.sortedWith { a, b -> col.compare(cleanName(a.name), cleanName(b.name)) }
-        }
-        2 -> {
-            val rank = HashMap<String, Int>()
-            recent.forEachIndexed { i, u -> if (!rank.containsKey(u)) rank[u] = i }
-            list.sortedBy { rank[it.url] ?: Int.MAX_VALUE }
-        }
-        else -> list
-    }
-    return ordered.sortedBy { it.logo.isBlank() }
 }
 
 @Composable
@@ -658,6 +530,7 @@ val IStarOff = mkIcon("M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 2
 val IFull = mkIcon("M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z")
 val IFullExit = mkIcon("M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z")
 val IPip = mkIcon("M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z")
+val ISort = mkIcon("M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z")
 val IMore = mkIcon("M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z")
 val IHead = mkIcon("M12 1c-4.97 0-9 4.03-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.87 3.13-7 7-7s7 3.13 7 7v2h-4v8h3c1.66 0 3-1.34 3-3v-7c0-4.97-4.03-9-9-9z")
 
@@ -880,6 +753,13 @@ fun AmbientGlow(pv: PlayerView?, ar: Float, modifier: Modifier = Modifier) {
         })
 }
 
+// ترتيب القنوات: 0 الأصلي، 1 أبجدي، 2 آخر ما شغّلته
+fun sortChannels(list: List<Channel>, mode: Int, rec: Map<String, Long>): List<Channel> = when (mode) {
+    1 -> list.sortedBy { cleanName(it.name).lowercase() }
+    2 -> list.sortedWith(compareByDescending<Channel> { rec[it.url] ?: 0L }.thenBy { cleanName(it.name).lowercase() })
+    else -> list
+}
+
 // اسم القناة للعرض: نشيل أي شي بين أقواس (1080p) أو [Not 24/7] ونخلي الاسم فقط
 private val tagRe = Regex("\\s*(\\([^)]*\\)|\\[[^\\]]*\\])")
 private val spRe = Regex("\\s{2,}")
@@ -1029,18 +909,12 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
     var vh by remember { mutableStateOf(0) }
     var pipMode by remember { mutableStateOf(store.pipMode()) }
     var menu by remember { mutableStateOf(false) }
-    var menuTop by remember { mutableStateOf(false) }      // قائمة الثلاث نقاط في واجهة الفيديو
-    var menuSort by remember { mutableStateOf(false) }     // قائمة ترتيب القنوات
-    var sortMode by remember { mutableStateOf(store.sortMode()) }
-    var recents by remember { mutableStateOf(store.recents()) }
-    var recentSnap by remember { mutableStateOf(recents) }   // نسخة الترتيب: تتحدث فقط وأنت خارج الفيديو عشان القائمة ما تتحرك تحتك
-    val bounce = remember { Animatable(0f) }                 // ارتداد الشاشة عند أقصى حد للترجيع
     val scope = rememberCoroutineScope()
     val hapticView = androidx.compose.ui.platform.LocalView.current
     // الأزرار تختفي تلقائياً بعد 5 ثواني من ظهورها (يتجدد العد عند أي لمسة على الأزرار)
     var uiTick by remember { mutableStateOf(0) }
-    LaunchedEffect(cur, ui, menu, menuTop, uiTick) {
-        if (cur != null && ui && !menu && !menuTop) {
+    LaunchedEffect(cur, ui, menu, uiTick) {
+        if (cur != null && ui && !menu) {
             snapshotFlow { reveal.value }.first { it >= 0.99f }
             delay(5000)
             ui = false
@@ -1102,13 +976,23 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
         }
     }
 
+    // ارتداد خفيف مع هزات بسيطة عند الوصول لحد التقريب (الأدنى أو الأقصى)
+    val limScale = remember { Animatable(1f) }
+    val limShake = remember { Animatable(0f) }
+    fun limitBounce() {
+        buzz(hapticView, false)
+        scope.launch {
+            launch { limScale.snapTo(0.93f); limScale.animateTo(1f, spring(dampingRatio = 0.3f, stiffness = 520f)) }
+            launch { limShake.snapTo(14f); limShake.animateTo(0f, spring(dampingRatio = 0.14f, stiffness = 800f)) }
+        }
+    }
+
     fun start(c: Channel, from: Rect? = null) {
         trace("start(${c.name}) closing=$closing")
         if (closing) return
         error = null; qSel = null; vh = 0; ui = true; zoom = 1f; panX = 0f; panY = 0f
         Hdr.ref = c.ref; Hdr.ua = c.ua
-        recents = (listOf(c.url) + recents.filter { it != c.url }).take(300)
-        store.saveRecents(recents)
+        store.touchRecent(c.url)
         val dm = ctx.resources.displayMetrics
         val cx = dm.widthPixels / 2f; val cy = dm.heightPixels / 2f
         origin = if (from != null && from.width > 0f) from else Rect(cx - 80f, cy - 80f, cx + 80f, cy + 80f)
@@ -1187,22 +1071,6 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
         }
     }
 
-    // أقصى حد للترجيع: الشاشة ترتد للخلف قليلاً وتهتز هزات خفيفة مع اهتزاز بسيط
-    fun limitHit() {
-        buzz(hapticView, false)
-        scope.launch {
-            bounce.snapTo(1f)
-            bounce.animateTo(0f, spring(dampingRatio = 0.22f, stiffness = 520f))
-        }
-    }
-
-    fun noRewind() {
-        limitHit()
-        Toast.makeText(ctx, "الترجيع غير متاح لهذا البث", Toast.LENGTH_SHORT).show()
-    }
-
-    LaunchedEffect(cur == null) { if (cur == null) recentSnap = recents }
-
     fun toggleFav(c: Channel) {
         favs = if (favs.any { it.url == c.url }) favs.filter { it.url != c.url } else favs + c
         store.saveFavs(favs)
@@ -1254,12 +1122,19 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
     }
 
     val favUrls = remember(favs) { favs.map { it.url }.toHashSet() }
-    val shownChannels = remember(channels, sortMode, recentSnap) { arrange(channels, sortMode, recentSnap) }
-    val shownFavs = remember(favs, sortMode, recentSnap) { arrange(favs, sortMode, recentSnap) }
     val hh = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 112.dp
     val layer = rememberGraphicsLayer()
     val frost = remember { if (Build.VERSION.SDK_INT >= 31) frostEffect(110f) else null }
     var menuMore by remember { mutableStateOf(false) }
+    var menuSort by remember { mutableStateOf(false) }
+    var sortMode by remember { mutableStateOf(store.sortMode()) }
+    var recents by remember { mutableStateOf(store.recents()) }
+    // آخر ما شغّلته يتحدّث لما ترجع للقائمة (عشان ما تتحرك البطاقات وأنت داخل قناة)
+    LaunchedEffect(cur == null) { if (cur == null) recents = store.recents() }
+    var lastSortApplied by remember { mutableStateOf(sortMode) }
+    LaunchedEffect(sortMode) {
+        if (sortMode != lastSortApplied) { lastSortApplied = sortMode; gridState.scrollToItem(0); favState.scrollToItem(0) }
+    }
     var names by remember { mutableStateOf(store.names()) }
     var menuFor by remember { mutableStateOf(-1) }
     var renameIdx by remember { mutableStateOf(-1) }
@@ -1320,6 +1195,9 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                             }
                         }, beyondViewportPageCount = 1) { page ->
                         val isFavPage = page == 0
+                        val shownList = remember(isFavPage, favs, channels, sortMode, recents) {
+                            sortChannels(if (isFavPage) favs else channels, sortMode, recents)
+                        }
                         Box(Modifier.fillMaxSize()) {
                             LazyVerticalGrid(
                                 state = if (isFavPage) favState else gridState,
@@ -1329,7 +1207,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 verticalArrangement = Arrangement.spacedBy(14.dp),
                                 modifier = Modifier.fillMaxSize()
                             ) {
-                                items(if (isFavPage) shownFavs else shownChannels, contentType = { "tile" }) { ch ->
+                                items(shownList, contentType = { "tile" }) { ch ->
                                     Tile(ch, ch.url in favUrls, onLong = { toggleFav(ch) }) { r -> start(ch, r) }
                                 }
                             }
@@ -1399,12 +1277,9 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     Icon(ISort, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
                                 }
                                 DropdownMenu(expanded = menuSort, onDismissRequest = { menuSort = false }) {
-                                    listOf("الترتيب الأصلي", "ترتيب أبجدي", "آخر ما شغّلته").forEachIndexed { i, t ->
+                                    listOf("الترتيب الأصلي", "أبجدي (A-Z)", "آخر ما شغّلته").forEachIndexed { i, t ->
                                         DropdownMenuItem(text = { Text(if (sortMode == i) "✓  $t" else t) }, onClick = {
-                                            menuSort = false
-                                            sortMode = i; store.setSortMode(i)
-                                            recentSnap = recents
-                                            scope.launch { gridState.scrollToItem(0); favState.scrollToItem(0) }
+                                            sortMode = i; store.setSortMode(i); menuSort = false
                                         })
                                     }
                                 }
@@ -1489,6 +1364,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
         }
 
         if (c != null) {
+            val isFav = favs.any { it.url == c.url }
             Box(
                 Modifier.fillMaxSize()
                     .graphicsLayer {
@@ -1536,8 +1412,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     } else if (zoom <= 1f && vert) {
                                         if (!full && ay < 0f && !blockUp) mode = 1
                                         else if (!full && ay > 0f) mode = 3
-                                    } else if (!full && ay > 0f && kotlin.math.abs(ay) > kotlin.math.abs(ax) * 0.7f &&
-                                        (zoom <= 1.15f || panY >= myTop - 6.dp.toPx())) {
+                                    } else if (!full && ay > 0f && kotlin.math.abs(ay) > kotlin.math.abs(ax) * 0.7f) {
                                         // سحب للأسفل شبه عمودي، أو الفيديو مقرّب وواصل لحافته العليا: نقبل الرمي
                                         mode = 3
                                     }
@@ -1555,12 +1430,10 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 } else if (moved && zoom > 1f) {
                                     // تحريك الفيديو بعد الزوم
                                     val d = ch.position - lastPos
+                                    // الفيديو يبقى في منتصف الشاشة عمودياً: تحريك أفقي فقط
                                     val mx = (zoom - 1f) * size.width / 2f
-                                    val my = (zoom - 1f) * size.height / 2f
                                     panX = (panX + d.x).coerceIn(-mx, mx)
-                                    panY = (panY + d.y).coerceIn(-my, my)
-                                    // الفيديو يبقى مسنتر عمودياً دائماً (في الشاشة الكاملة المقلوبة المحور العمودي للصورة هو أفقي للجهاز)
-                                    if (rot) panX = 0f else panY = 0f
+                                    panY = 0f
                                     ch.consume()
                                 } else if (mode != 0) {
                                     // الفيديو يتحرك مع الإصبع حي
@@ -1639,6 +1512,8 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                             if (second == null) { ui = !ui; return@awaitEachGesture }
                             var lastP = second.position
                             var dragged = false
+                            var over = 0f
+                            var armed = true
                             while (true) {
                                 val ev = awaitPointerEvent()
                                 val ch = ev.changes.firstOrNull { it.id == second.id } ?: break
@@ -1648,52 +1523,40 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 if (!dragged && (ch.position - second.position).getDistance() > viewConfiguration.touchSlop) dragged = true
                                 val dyPic = if (full && size.height > size.width) -d.x else d.y
                                 if (dyPic != 0f) {
-                                    val z0 = zoom
-                                    zoom = (zoom * kotlin.math.exp(dyPic / 450f)).coerceIn(1f, 4f)
-                                    // محور التقريب = مكان الإصبع (نقطة الضغطة الثانية) مو سنتر الفيديو
-                                    val r = zoom / z0
-                                    val px = second.position.x - size.width / 2f
-                                    val py = second.position.y - size.height / 2f
-                                    panX = px - r * (px - panX)
-                                    panY = py - r * (py - panY)
+                                    val zRaw = zoom * kotlin.math.exp(dyPic / 450f)
+                                    zoom = zRaw.coerceIn(1f, 4f)
+                                    // التقريب حول منتصف الشاشة، والفيديو يبقى في المنتصف عمودياً
                                     val mx = (zoom - 1f) * size.width / 2f
-                                    val my = (zoom - 1f) * size.height / 2f
-                                    panX = panX.coerceIn(-mx, mx); panY = panY.coerceIn(-my, my)
-                                    if (full && size.height > size.width) panX = 0f else panY = 0f   // مسنتر دائماً
+                                    panX = panX.coerceIn(-mx, mx); panY = 0f
+                                    if (zRaw < 1f || zRaw > 4f) {
+                                        // وصلنا لحد التقريب وما زال المستخدم يسحب: ارتداد وهزات بسيطة
+                                        over += kotlin.math.abs(dyPic)
+                                        if (armed && over > 28.dp.toPx()) { armed = false; limitBounce() }
+                                    } else { over = 0f; armed = true }
                                     ch.consume()
                                 }
                             }
-                            // ضغطتين بدون سحب: لو الفيديو مكبّر نرجعه بارتداد خفيف مع هزة، وإلا نكبّره ليملأ الشاشة من المنتصف
                             if (!dragged) {
+                                val z0 = zoom; val x0 = panX
                                 if (zoom > 1.02f) {
-                                    val z0 = zoom; val x0 = panX; val y0 = panY
+                                    // ضغطتين وهو مقرّب: يرجع لحجمه بارتداد خفيف مع هزة
                                     buzz(hapticView, false)
                                     scope.launch {
                                         val t = Animatable(0f)
                                         t.animateTo(1f, spring(dampingRatio = 0.62f, stiffness = 380f)) {
                                             zoom = z0 + (1f - z0) * value
-                                            panX = x0 * (1f - value); panY = y0 * (1f - value)
+                                            panX = x0 * (1f - value); panY = 0f
                                         }
                                         zoom = 1f; panX = 0f; panY = 0f
                                     }
                                 } else {
-                                    // مقاس الفيديو المعروض فعلياً (بعد التدوير لو شاشة كاملة) لنحسب التكبير اللي يغطي الشاشة
-                                    val ar = if (vAr > 0f) vAr else 16f / 9f
-                                    val sw = size.width.toFloat(); val sh = size.height.toFloat()
-                                    val dw: Float; val dh: Float
-                                    if (sh > sw) { dw = sw; dh = if (full) minOf(sh, sw * ar) else minOf(sh, sw / ar) }
-                                    else if (ar > sw / sh) { dw = sw; dh = sw / ar } else { dh = sh; dw = sh * ar }
-                                    val cover = maxOf(sw / dw, sh / dh).coerceIn(1f, 4f)
-                                    val target = 1f + (cover - 1f) * 0.5f   // نصف مقدار التكبير الكامل
-                                    if (target > 1.05f) {
-                                        buzz(hapticView, false)
-                                        scope.launch {
-                                            val t = Animatable(0f)
-                                            t.animateTo(1f, tween(340, easing = FastOutSlowInEasing)) {
-                                                zoom = 1f + (target - 1f) * value
-                                                panX = 0f; panY = 0f
-                                            }
+                                    // ضغطتين: تقريب 1.5x حول المنتصف
+                                    scope.launch {
+                                        val t = Animatable(0f)
+                                        t.animateTo(1f, tween(200, easing = FastOutSlowInEasing)) {
+                                            zoom = 1f + 0.5f * value; panY = 0f
                                         }
+                                        zoom = 1.5f
                                     }
                                 }
                             }
@@ -1721,11 +1584,10 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                         val sFull = if (portrait) kotlin.math.min(h, w * ar) / kotlin.math.min(w, h * ar) else 1f
                         // خروج من أفقي حقيقي: الفيديو ينزل ويصغر مع الإصبع
                         val q = if (!portrait && full && fpDrag >= 0f) 1f - fp else 0f
-                        val bn = bounce.value
-                        val k = (1f + (sFull - 1f) * fp) * zoom * (1f - 0.15f * q) * (1f - 0.06f * bn)
+                        val k = (1f + (sFull - 1f) * fp) * zoom * limScale.value * (1f - 0.15f * q)
                         scaleX = k; scaleY = k
-                        rotationZ = if (portrait) 90f * fp else 0f
-                        translationX = panX + fsNowX() + bn * 14.dp.toPx(); translationY = panY + q * 0.4f * h + fsNowY()
+                        rotationZ = (if (portrait) 90f * fp else 0f) + limShake.value * 0.12f
+                        translationX = panX + fsNowX() + limShake.value; translationY = panY + q * 0.4f * h + fsNowY()
                     }
                     AmbientGlow(pvRef, vAr, Modifier.graphicsLayer(videoXf))
                     Video(it, Modifier.graphicsLayer(videoXf), onView = { v -> pvRef = v })
@@ -1751,50 +1613,39 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                     val dd = if (flying) 0f else (1f - dyNow() / (size.height * 0.1f)).coerceIn(0f, 1f)
                     alpha = uiAlpha * ((reveal.value - 0.6f) / 0.4f).coerceIn(0f, 1f) * steady * dd * (1f - kotlin.math.sqrt(fsNowX() * fsNowX() + fsNowY() * fsNowY()) / (size.height * 0.1f)).coerceIn(0f, 1f)
                         }) {
-                            Column(
-                                Modifier.align(Alignment.TopStart).graphicsLayer { translationY = -(1f - uiAlpha) * 28.dp.toPx() }
-                                    .fillMaxWidth().statusBarsPadding().padding(12.dp)
-                            ) {
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    GlassIcon(IBack, Modifier.width(56.dp)) { close() }
-                                    player?.let { GlassVolume(it, { uiTick++ }, Modifier.weight(1f), showValue = false) }
-                                    Box {
-                                        GlassIcon(IMore, Modifier.width(56.dp)) { uiTick++; menuTop = true }
-                                        DropdownMenu(expanded = menuTop, onDismissRequest = { menuTop = false }) {
-                                            DropdownMenuItem(
-                                                leadingIcon = { Icon(if (pipMode) IHead else IPip, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp)) },
-                                                text = { Text(if (pipMode) "التبديل إلى: صوت في الخلفية" else "التبديل إلى: صورة داخل صورة") },
-                                                onClick = { menuTop = false; uiTick++; pipMode = !pipMode; store.setPipMode(pipMode) }
-                                            )
-                                            DropdownMenuItem(
-                                                text = { Text("الجودة: " + (if (qSel != null) "${qSel}p" else if (vh > 0) "تلقائي (${vh}p)" else "تلقائي")) },
-                                                onClick = { menuTop = false; menu = true }
-                                            )
-                                        }
-                                        // قائمة اختيار الجودة تنفتح من نفس مكان الثلاث نقاط
-                                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                            DropdownMenuItem(text = { Text("تلقائي") }, onClick = { setQuality(null, null); menu = false })
-                                            quals.forEach { (h, o) ->
-                                                DropdownMenuItem(text = { Text("${h}p") }, onClick = { setQuality(o, h); menu = false })
-                                            }
-                                        }
-                                    }
-                                }
-                                // اسم القناة تحت الصف العلوي
-                                Text(cleanName(c.name), color = Color.White, maxLines = 1, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp).glass(12.dp).padding(horizontal = 12.dp, vertical = 6.dp))
-                            }
-                            // الأسفل: زر التشغيل/الإيقاف + سلايدر التقديم والترجيع
                             Row(
-                                Modifier.align(Alignment.BottomCenter).graphicsLayer { translationY = (1f - uiAlpha) * 28.dp.toPx() }
-                                    .fillMaxWidth().navigationBarsPadding().padding(12.dp),
+                                Modifier.align(Alignment.TopStart).graphicsLayer { translationY = -(1f - uiAlpha) * 28.dp.toPx() }
+                                    .fillMaxWidth().statusBarsPadding().padding(12.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically
                             ) {
-                                GlassIcon(if (playing) IPause else IPlay, Modifier.width(64.dp)) {
+                                GlassIcon(IBack, Modifier.width(64.dp)) { close() }
+                                Text(cleanName(c.name), color = Color.White, maxLines = 1, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                GlassIcon(if (isFav) IStarOn else IStarOff, Modifier.width(64.dp), if (isFav) Color(0xFFFFD60A) else Color.White) { uiTick++; toggleFav(c) }
+                            }
+                            Column(
+                                Modifier.align(Alignment.BottomCenter).graphicsLayer { translationY = (1f - uiAlpha) * 28.dp.toPx() }
+                                    .fillMaxWidth().navigationBarsPadding().padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                            player?.let { GlassVolume(it, { uiTick++ }) }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                GlassIcon(if (playing) IPause else IPlay, Modifier.weight(1f)) {
                                     uiTick++
                                     player?.let { if (it.isPlaying) it.pause() else it.play() }
                                 }
-                                player?.let { GlassSeek(it, { uiTick++ }, { limitHit() }, { noRewind() }, Modifier.weight(1f)) }
+                                Box(Modifier.weight(1f)) {
+                                    GlassButton(if (qSel != null) "$qSel" else if (vh > 0) "$vh" else "—", Modifier.fillMaxWidth()) { menu = true }
+                                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                        DropdownMenuItem(text = { Text("تلقائي") }, onClick = { setQuality(null, null); menu = false })
+                                        quals.forEach { (h, o) ->
+                                            DropdownMenuItem(text = { Text("${h}p") }, onClick = { setQuality(o, h); menu = false })
+                                        }
+                                    }
+                                }
+                                GlassIcon(if (pipMode) IPip else IHead, Modifier.weight(1f)) {
+                                    uiTick++; pipMode = !pipMode; store.setPipMode(pipMode)
+                                }
+                            }
                             }
                         }
 
