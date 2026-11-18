@@ -33,6 +33,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -1041,7 +1042,28 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                         drawRect(Brush.radialGradient(listOf(Color(0x664B3AA8), Color.Transparent), Offset(size.width * 0.1f, size.height * 0.05f), size.width * 0.9f))
                         drawRect(Brush.radialGradient(listOf(Color(0x550A6C94), Color.Transparent), Offset(size.width * 0.95f, size.height * 0.95f), size.width * 0.9f))
                     })
-                    HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
+                    HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()
+                        .pointerInput(Unit) {
+                            // الواجهة الرئيسية: نلغي السحب لليسار (عكس المفضلة) عشان ما يتداخل مع التمرير للأسفل
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                if (pager.settledPage != 1 || pager.isScrollInProgress) return@awaitEachGesture
+                                var blocking = false
+                                while (true) {
+                                    val ev = awaitPointerEvent(PointerEventPass.Initial)
+                                    val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                                    if (!ch.pressed) break
+                                    val tot = ch.position - down.position
+                                    if (!blocking) {
+                                        if (tot.getDistance() <= viewConfiguration.touchSlop) continue
+                                        // أي حركة فيها ميل لليسار تنلغي؛ الحركة العمودية الصريحة تمر للقائمة تتمرر عادي
+                                        blocking = tot.x < 0f && kotlin.math.abs(tot.x) * 2f > kotlin.math.abs(tot.y)
+                                        if (!blocking) break
+                                    }
+                                    ch.consume()
+                                }
+                            }
+                        }, beyondViewportPageCount = 1) { page ->
                         val isFavPage = page == 0
                         Box(Modifier.fillMaxSize()) {
                             LazyVerticalGrid(
@@ -1238,13 +1260,12 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     moved = true
                                     val vert = kotlin.math.abs(ay) > kotlin.math.abs(ax)
                                     val myTop = (zoom - 1f) * size.height / 2f
-                                    if (zoom <= 1f && vert) {
+                                    if (zoom <= 1f && full) {
+                                        // شاشة كاملة: السحب بأي اتجاه يلغيها ويرجع للبورتريه
+                                        mode = 2
+                                    } else if (zoom <= 1f && vert) {
                                         if (!full && ay < 0f && !blockUp) mode = 1
-                                        else if (full && ay > 0f) mode = 2
                                         else if (!full && ay > 0f) mode = 3
-                                    } else if (full && rot && zoom <= 1f && tot.y > 0f && kotlin.math.abs(tot.y) > kotlin.math.abs(tot.x) * 0.7f) {
-                                        // الجوال عمودي وشاشة كاملة: السحب للأسفل، الفيديو ينزل مع الإصبع وعند الإفلات يلف ويصغر
-                                        mode = 4
                                     } else if (!full && ay > 0f && kotlin.math.abs(ay) > kotlin.math.abs(ax) * 0.7f &&
                                         (zoom <= 1.15f || panY >= myTop - 6.dp.toPx())) {
                                         // سحب للأسفل شبه عمودي، أو الفيديو مقرّب وواصل لحافته العليا: نقبل الرمي
@@ -1255,13 +1276,10 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     // سحب للأسفل في البورتريه: الفيديو ينزل مع الإصبع (حتى لو مقرّب)
                                     dismissDrag = ay.coerceAtLeast(0f)
                                     ch.consume()
-                                } else if (mode == 1 || mode == 2 || mode == 4) {
-                                    // الفيديو يلحق إصبعك بنفس الاتجاه
-                                    when (mode) {
-                                        1 -> fsDy = tot.y.coerceAtMost(0f)
-                                        4 -> fsDy = tot.y.coerceAtLeast(0f)
-                                        else -> if (rot) fsDx = tot.x.coerceAtMost(0f) else fsDy = tot.y.coerceAtLeast(0f)
-                                    }
+                                } else if (mode == 1 || mode == 2) {
+                                    // الفيديو يلحق إصبعك بنفس الاتجاه (في الخروج من الشاشة الكاملة: أي اتجاه)
+                                    if (mode == 1) fsDy = tot.y.coerceAtMost(0f)
+                                    else { fsDx = tot.x; fsDy = tot.y }
                                     fsDrag = 1f
                                     ch.consume()
                                 } else if (moved && zoom > 1f) {
@@ -1280,12 +1298,12 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 }
                                 lastPos = ch.position
                             }
-                            if (mode == 1 || mode == 2 || mode == 4) {
+                            if (mode == 1 || mode == 2) {
                                 val v = vt.calculateVelocity()
-                                val leftSwipe = mode == 2 && full && size.height > size.width
-                                val disp = if (leftSwipe) -fsDx else if (mode == 1) -fsDy else fsDy
-                                val thr = (if (leftSwipe) size.width else size.height) * 0.12f
-                                val vel = if (leftSwipe) -v.x else if (mode == 1) -v.y else v.y
+                                val dispX = kotlin.math.abs(fsDx); val dispY = kotlin.math.abs(fsDy)
+                                val disp = if (mode == 1) -fsDy else maxOf(dispX, dispY)
+                                val thr = if (mode == 2 && dispX > dispY) size.width * 0.12f else size.height * 0.12f
+                                val vel = if (mode == 1) -v.y else kotlin.math.sqrt(v.x * v.x + v.y * v.y)
                                 val go = disp > thr || vel > 900f
                                 val enter = mode == 1
                                 scope.launch {
