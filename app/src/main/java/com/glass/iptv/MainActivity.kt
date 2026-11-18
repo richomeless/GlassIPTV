@@ -1332,7 +1332,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                             var lastPos = down.position
                             val dist = 280.dp.toPx()
                             // الربع السفلي من الشاشة (منطقة إيماءة الخروج من التطبيق) ما يفعّل الشاشة الكاملة
-                            val blockUp = !full && down.position.y > size.height * 0.8f
+                            val blockUp = !full && down.position.y > size.height * 0.86f
                             var prog = if (full) 1f else 0f
                             while (true) {
                                 val ev = awaitPointerEvent()
