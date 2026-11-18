@@ -563,7 +563,7 @@ fun Tile(c: Channel, fav: Boolean, onLong: () -> Unit, onClick: (Rect) -> Unit) 
                 modifier = Modifier.align(Alignment.TopEnd).padding(6.dp))
         }
         // سطرين دايماً عشان كل الصفوف بنفس الارتفاع
-        Text(c.name, color = Color.White.copy(0.9f), fontSize = 12.sp, maxLines = 2, minLines = 2,
+        Text(cleanName(c.name), color = Color.White.copy(0.9f), fontSize = 12.sp, maxLines = 2, minLines = 2,
             textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
     }
 }
@@ -651,6 +651,11 @@ fun VideoView(p: Player, modifier: Modifier = Modifier) = AndroidView(
     update = { it.player = p },
     modifier = modifier.fillMaxSize()
 )
+
+// اسم القناة للعرض: نشيل أي شي بين أقواس (1080p) أو [Not 24/7] ونخلي الاسم فقط
+private val tagRe = Regex("\\s*(\\([^)]*\\)|\\[[^\\]]*\\])")
+private val spRe = Regex("\\s{2,}")
+fun cleanName(n: String): String = n.replace(tagRe, "").replace(spRe, " ").trim().ifEmpty { n }
 
 // يجهّز شعار القناة كصورة مربعة (شعار كامل بدون قص) لإشعار التشغيل والجزيرة، بخلفية داكنة أو فاتحة حسب لون الشعار
 fun fitLogo(u: String): ByteArray? {
@@ -877,7 +882,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
         }
         player?.let { p ->
             val b = MediaItem.Builder().setUri(c.url)
-                .setMediaMetadata(MediaMetadata.Builder().setTitle(c.name).apply {
+                .setMediaMetadata(MediaMetadata.Builder().setTitle(cleanName(c.name)).apply {
                     // لوقو القناة يظهر في إشعار التشغيل وبطاقة الميديا
                     if (c.logo.startsWith("http")) setArtworkUri(android.net.Uri.parse(c.logo))
                 }.build())
@@ -1434,7 +1439,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically
                             ) {
                                 GlassIcon(IBack, Modifier.width(64.dp)) { close() }
-                                Text(c.name, color = Color.White, maxLines = 1, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                Text(cleanName(c.name), color = Color.White, maxLines = 1, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                                 GlassIcon(if (isFav) IStarOn else IStarOff, Modifier.width(64.dp), if (isFav) Color(0xFFFFD60A) else Color.White) { uiTick++; toggleFav(c) }
                             }
                             Column(
