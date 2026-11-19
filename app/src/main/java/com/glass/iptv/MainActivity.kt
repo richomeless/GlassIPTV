@@ -1465,7 +1465,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             topLeft = Offset(0f, yb - 1.dp.toPx()), size = Size(size.width, 2.dp.toPx()))
                         // مذنّب صغير وناعم: يظهر تدريجياً من الربع ويتلاشى قبل نهاية الخط، وألوانه تتغير ببطء
                         fun Color.a(x: Float) = copy(alpha = alpha * x * env)
-                        val tl = size.width * 0.20f
+                        val tl = size.width * 0.26f
                         fun taper(tw: Float) = Path().apply {
                             moveTo(hx, yb - tw / 2f)
                             quadraticBezierTo(hx - tl * 0.5f, yb - tw * 0.25f, hx - tl, yb)
@@ -1473,8 +1473,16 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             this.close()   // this عشان ما تنادي دالة close() حقت القناة
                         }
                         if (env > 0.002f) {
-                            drawPath(taper(14.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc.a(0.05f), hc2.a(0.14f)), startX = hx - tl, endX = hx))
-                            drawPath(taper(5.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc2.a(0.28f), pal.shim.a(0.6f)), startX = hx - tl, endX = hx))
+                            // أثر متوهج يبقى على الخط خلف النجمة ويتلاشى تدريجياً
+                            val gx0 = (hx - tl * 1.5f).coerceAtLeast(0f)
+                            drawRect(Brush.horizontalGradient(listOf(Color.Transparent, hc.a(0.10f), hc2.a(0.30f)), startX = gx0, endX = hx),
+                                topLeft = Offset(gx0, yb - 3.dp.toPx()), size = Size(hx - gx0, 6.dp.toPx()))
+                            drawRect(Brush.horizontalGradient(listOf(Color.Transparent, hc2.a(0.35f), pal.shim.a(0.75f)), startX = gx0, endX = hx),
+                                topLeft = Offset(gx0, yb - 1.dp.toPx()), size = Size(hx - gx0, 2.dp.toPx()))
+                            // ذيل نحيف بثلاث طبقات: هالة خفيفة، ثم لون متوهج، ثم قلب أبيض ساطع
+                            drawPath(taper(7.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc.a(0.12f), hc2.a(0.38f)), startX = hx - tl, endX = hx))
+                            drawPath(taper(3.2f.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc2.a(0.5f), hc.a(0.9f)), startX = hx - tl, endX = hx))
+                            drawPath(taper(1.4f.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, pal.shim.a(0.7f), Color.White.copy(alpha = env)), startX = hx - tl * 0.85f, endX = hx))
                             for (i in 1..4) {
                                 val f = i / 5f
                                 val sp = Offset(hx - tl * f * 0.8f, yb + kotlin.math.sin(shT * 14f + i * 2.1f) * 4.dp.toPx() * f)
