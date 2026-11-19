@@ -156,6 +156,14 @@ class Store(ctx: Context) {
     // الثيم: 0 هوية التطبيق، 1 Material You
     fun themeStyle(): Int = p.getInt("tstyle", 0)
     fun setThemeStyle(m: Int) = p.edit().putInt("tstyle", m).apply()
+    // القنوات اللي المستخدم بدّل نسبة شاشتها (16:9 <-> 4:3): كل قناة تتذكر اختيارها لحالها
+    fun arFlips(): Set<String> = (p.getString("arf", "") ?: "").split("\n").filter { it.isNotBlank() }.toSet()
+    fun arFlip(url: String): Boolean = url in arFlips()
+    fun setArFlip(url: String, b: Boolean) {
+        val s = arFlips().toMutableSet()
+        if (b) s.add(url) else s.remove(url)
+        p.edit().putString("arf", s.joinToString("\n")).apply()
+    }
     fun pipMode(): Boolean = p.getBoolean("pip", true)
     fun setPipMode(b: Boolean) = p.edit().putBoolean("pip", b).apply()
     fun favs(): List<Channel> = (p.getString("fav", "") ?: "").split("\n").filter { it.isNotBlank() }.map {
@@ -1162,6 +1170,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
         trace("start(${c.name}) closing=$closing")
         if (closing) return
         error = null; qSel = null; vh = 0; ui = true; zoom = 1f; panX = 0f; panY = 0f
+        arForced = store.arFlip(c.url)
         Hdr.ref = c.ref; Hdr.ua = c.ua
         store.bumpCount(c.url)
         val dm = ctx.resources.displayMetrics
@@ -1273,6 +1282,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                 md.artworkUri?.toString() ?: "", Hdr.ref, Hdr.ua)
             trace("resume video from notification: ${ch.name}")
             error = null; qSel = null; vh = 0; ui = true; zoom = 1f; panX = 0f; panY = 0f
+            arForced = store.arFlip(ch.url)
             val dm = ctx.resources.displayMetrics
             val cx = dm.widthPixels / 2f; val cy = dm.heightPixels / 2f
             origin = Rect(cx - 80f, cy - 80f, cx + 80f, cy + 80f)
@@ -1866,6 +1876,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                 GlassButton(label, Modifier.width(64.dp)) {
                                     uiTick++; buzz(hapticView, false)
                                     arForced = !arForced
+                                    store.setArFlip(c.url, arForced)
                                     zoom = 1f; panX = 0f; panY = 0f
                                 }
                             }
