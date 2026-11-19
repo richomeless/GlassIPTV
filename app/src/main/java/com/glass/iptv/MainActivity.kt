@@ -24,6 +24,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.exponentialDecay
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -119,6 +120,7 @@ import coil.request.ImageRequest
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
@@ -1121,6 +1123,29 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
         }
     }
 
+    // حدود تحريك الفيديو المقرّب (بإحداثيات الشاشة). لو الفيديو أصغر من الشاشة على محور يبقى في المنتصف
+    fun panLimit(z: Float, w: Float, h: Float): Offset {
+        val ar = if (vAr > 0f) vAr else 16f / 9f
+        val vw: Float; val vh: Float
+        if (w / h < ar) { vw = w; vh = w / ar } else { vh = h; vw = h * ar }
+        val rot = full && h > w
+        val sFull = if (rot) kotlin.math.min(h, w * ar) / kotlin.math.min(w, h * ar) else 1f
+        val k = sFull * z
+        val ex = (if (rot) vh else vw) * k
+        val ey = (if (rot) vw else vh) * k
+        return Offset(((ex - w) / 2f).coerceAtLeast(0f), ((ey - h) / 2f).coerceAtLeast(0f))
+    }
+    // الزوم حول نقطة (f نسبة لمنتصف الشاشة): النقطة اللي تحت الإصبع تبقى مكانها
+    fun zoomAt(z0: Float, pan0: Offset, z1: Float, f: Offset, w: Float, h: Float): Offset {
+        val r = z1 / z0
+        val lim = panLimit(z1, w, h)
+        return Offset(
+            (f.x - (f.x - pan0.x) * r).coerceIn(-lim.x, lim.x),
+            (f.y - (f.y - pan0.y) * r).coerceIn(-lim.y, lim.y)
+        )
+    }
+    val flingJob = remember { arrayOfNulls<Job>(1) }
+
     fun start(c: Channel, from: Rect? = null) {
         trace("start(${c.name}) closing=$closing")
         if (closing) return
@@ -1553,9 +1578,11 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                     .pointerInput(Unit) {
                         awaitEachGesture {
                             val down = awaitFirstDown()
+                            flingJob[0]?.cancel()
                             val vt = VelocityTracker()
                             vt.addPointerInputChange(down)
                             var moved = false
+                            var panning = false
                             var released = false
                             var mode = 0            // 0 لا شي، 1 دخول شاشة كاملة، 2 خروج منها
                             var lastPos = down.position
@@ -1576,14 +1603,15 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                 if (!moved && tot.getDistance() > viewConfiguration.touchSlop) {
                                     moved = true
                                     val vert = kotlin.math.abs(ay) > kotlin.math.abs(ax)
-                                    val myTop = (zoom - 1f) * size.height / 2f
+                                    val limM = panLimit(zoom, size.width.toFloat(), size.height.toFloat())
+                                    val canPanDown = zoom > 1.02f && panY < limM.y - 1f
                                     if (zoom <= 1.02f && full) {
                                         // شاشة كاملة: السحب بأي اتجاه يلغيها ويرجع للبورتريه
                                         mode = 2
                                     } else if (zoom <= 1.02f && vert) {
                                         if (!full && ay < 0f && !blockUp) mode = 1
                                         else if (!full && ay > 0f) mode = 3
-                                    } else if (!full && ay > 0f && kotlin.math.abs(ay) > kotlin.math.abs(ax) * 0.7f) {
+                                    } else if (!full && ay > 0f && !canPanDown && kotlin.math.abs(ay) > kotlin.math.abs(ax) * 0.7f) {
                                         // سحب للأسفل شبه عمودي، أو الفيديو مقرّب وواصل لحافته العليا: نقبل الرمي
                                         mode = 3
                                     }
@@ -1601,10 +1629,10 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                 } else if (moved && zoom > 1.02f) {
                                     // تحريك الفيديو بعد الزوم
                                     val d = ch.position - lastPos
-                                    // الفيديو يبقى في منتصف الشاشة عمودياً: تحريك أفقي فقط
-                                    val mx = (zoom - 1f) * size.width / 2f
-                                    panX = (panX + d.x).coerceIn(-mx, mx)
-                                    panY = 0f
+                                    val lim = panLimit(zoom, size.width.toFloat(), size.height.toFloat())
+                                    panX = (panX + d.x).coerceIn(-lim.x, lim.x)
+                                    panY = (panY + d.y).coerceIn(-lim.y, lim.y)
+                                    panning = true
                                     ch.consume()
                                 } else if (mode != 0) {
                                     // الفيديو يتحرك مع الإصبع حي
@@ -1677,11 +1705,32 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                 settleFull(prog, target)
                                 return@awaitEachGesture
                             }
+                            if (panning && released && zoom > 1.02f) {
+                                // انزلاق بعد الإفلات: الفيديو يكمل بسرعة الإصبع ويهدأ تدريجياً
+                                val v = vt.calculateVelocity()
+                                val lim = panLimit(zoom, size.width.toFloat(), size.height.toFloat())
+                                val decay = exponentialDecay<Float>()
+                                flingJob[0]?.cancel()
+                                flingJob[0] = scope.launch {
+                                    if (lim.x > 0f && kotlin.math.abs(v.x) > 60f) launch {
+                                        Animatable(panX).apply { updateBounds(-lim.x, lim.x) }
+                                            .animateDecay(v.x, decay) { if (zoom > 1.02f) panX = value }
+                                    }
+                                    if (lim.y > 0f && kotlin.math.abs(v.y) > 60f) launch {
+                                        Animatable(panY).apply { updateBounds(-lim.y, lim.y) }
+                                            .animateDecay(v.y, decay) { if (zoom > 1.02f) panY = value }
+                                    }
+                                }
+                                return@awaitEachGesture
+                            }
                             if (!released || moved) return@awaitEachGesture
                             // ضغطة وحدة: إظهار/إخفاء الأزرار. ضغطتين مع سحب: زوم
                             val second = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) { awaitFirstDown() }
                             if (second == null) { ui = !ui; return@awaitEachGesture }
                             var lastP = second.position
+                            val sw = size.width.toFloat(); val sh = size.height.toFloat()
+                            // نقطة التقريب = مكان الإصبع (نسبة لمنتصف الشاشة)
+                            val anchor = Offset(second.position.x - sw / 2f, second.position.y - sh / 2f)
                             var dragged = false
                             var over = 0f
                             var armed = true
@@ -1695,10 +1744,9 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                 val dyPic = if (full && size.height > size.width) -d.x else d.y
                                 if (dyPic != 0f) {
                                     val zRaw = zoom * kotlin.math.exp(dyPic / 450f)
-                                    zoom = zRaw.coerceIn(1f, 4f)
-                                    // التقريب حول منتصف الشاشة، والفيديو يبقى في المنتصف عمودياً
-                                    val mx = (zoom - 1f) * size.width / 2f
-                                    panX = panX.coerceIn(-mx, mx); panY = 0f
+                                    val zNew = zRaw.coerceIn(1f, 4f)
+                                    val np = zoomAt(zoom, Offset(panX, panY), zNew, anchor, sw, sh)
+                                    zoom = zNew; panX = np.x; panY = np.y
                                     if (zRaw < 1f || zRaw > 4f) {
                                         // وصلنا لحد التقريب وما زال المستخدم يسحب: ارتداد وهزات بسيطة
                                         over += kotlin.math.abs(dyPic)
@@ -1710,7 +1758,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             // رجعنا تقريباً للحجم الطبيعي: نثبّته على 1 بالضبط عشان إيماءة الشاشة الكاملة ما تتعطل
                             if (dragged && zoom < 1.05f) { zoom = 1f; panX = 0f; panY = 0f }
                             if (!dragged) {
-                                val z0 = zoom; val x0 = panX
+                                val z0 = zoom; val x0 = panX; val y0 = panY
                                 if (zoom > 1.02f) {
                                     // ضغطتين وهو مقرّب: يرجع لحجمه بارتداد خفيف مع هزة
                                     buzz(hapticView, false)
@@ -1718,18 +1766,22 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                         val t = Animatable(0f)
                                         t.animateTo(1f, spring(dampingRatio = 0.62f, stiffness = 380f)) {
                                             zoom = z0 + (1f - z0) * value
-                                            panX = x0 * (1f - value); panY = 0f
+                                            panX = x0 * (1f - value); panY = y0 * (1f - value)
                                         }
                                         zoom = 1f; panX = 0f; panY = 0f
                                     }
                                 } else {
-                                    // ضغطتين: تقريب 1.5x حول المنتصف
+                                    // ضغطتين: تقريب 1.5x حول مكان الإصبع
+                                    val p0 = Offset(panX, panY)
                                     scope.launch {
                                         val t = Animatable(0f)
                                         t.animateTo(1f, tween(200, easing = FastOutSlowInEasing)) {
-                                            zoom = 1f + 0.5f * value; panY = 0f
+                                            val zv = 1f + 0.5f * value
+                                            val np = zoomAt(z0, p0, zv, anchor, sw, sh)
+                                            zoom = zv; panX = np.x; panY = np.y
                                         }
-                                        zoom = 1.5f
+                                        val np = zoomAt(z0, p0, 1.5f, anchor, sw, sh)
+                                        zoom = 1.5f; panX = np.x; panY = np.y
                                     }
                                 }
                             }
