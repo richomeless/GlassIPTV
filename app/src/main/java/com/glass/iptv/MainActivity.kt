@@ -148,6 +148,12 @@ class Store(ctx: Context) {
         val m = counts().toMutableMap(); m[url] = (m[url] ?: 0) + 1
         p.edit().putString("cnt", m.entries.joinToString("\n") { "${it.key}\t${it.value}" }).apply()
     }
+    // وضع الألوان: 0 حسب النظام، 1 فاتح، 2 داكن
+    fun themeMode(): Int = p.getInt("tmode", 0)
+    fun setThemeMode(m: Int) = p.edit().putInt("tmode", m).apply()
+    // الثيم: 0 هوية التطبيق، 1 Material You
+    fun themeStyle(): Int = p.getInt("tstyle", 0)
+    fun setThemeStyle(m: Int) = p.edit().putInt("tstyle", m).apply()
     fun pipMode(): Boolean = p.getBoolean("pip", true)
     fun setPipMode(b: Boolean) = p.edit().putBoolean("pip", b).apply()
     fun favs(): List<Channel> = (p.getString("fav", "") ?: "").split("\n").filter { it.isNotBlank() }.map {
@@ -163,6 +169,8 @@ class MainActivity : ComponentActivity() {
     private val controller = mutableStateOf<MediaController?>(null)
     private val inPip = mutableStateOf(false)
     private val openReq = mutableStateOf(0)
+    private val themeMode = mutableIntStateOf(0)
+    private val themeStyle = mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -176,23 +184,32 @@ class MainActivity : ComponentActivity() {
         val f = MediaController.Builder(this, token).buildAsync()
         f.addListener({ controller.value = f.get() }, MoreExecutors.directExecutor())
         future = f
+        val themeStore = Store(applicationContext)
+        themeMode.intValue = themeStore.themeMode()
+        themeStyle.intValue = themeStore.themeStyle()
         setContent {
-            // الثيم يتبع ثيم الجوال تلقائياً (داكن/فاتح)
-            val darkTheme = isSystemInDarkTheme()
-            MaterialTheme(
-                typography = appTypography(),
-                colorScheme = if (darkTheme) darkColorScheme(
-                    surface = Color(0xFF14161D), onSurface = Color(0xFFE6E8F0),
-                    surfaceContainer = Color(0xFF191B23), surfaceContainerHigh = Color(0xFF1D2029),
-                    background = Color(0xFF0A0B10), onBackground = Color(0xFFE6E8F0)
-                ) else lightColorScheme(
-                    surface = Color(0xFFF7F8FE), onSurface = Color(0xFF12141C),
-                    surfaceContainer = Color(0xFFEDEFF9), surfaceContainerHigh = Color(0xFFE8EBF7),
-                    background = Color(0xFFF2F4FB), onBackground = Color(0xFF12141C)
-                )
-            ) {
-                CompositionLocalProvider(LocalPal provides (if (darkTheme) DarkPal else LightPal)) {
-                    App(controller.value, inPip.value, openReq.value) { enterPip() }
+            // وضع الألوان (نظام/فاتح/داكن) والثيم (هوية التطبيق/Material You) من الإعدادات
+            val darkTheme = when (themeMode.intValue) { 1 -> false; 2 -> true; else -> isSystemInDarkTheme() }
+            val appCtx = LocalContext.current
+            val dyn = if (themeStyle.intValue == 1) dynamicScheme(appCtx, darkTheme) else null
+            val scheme = dyn ?: if (darkTheme) darkColorScheme(
+                surface = Color(0xFF14161D), onSurface = Color(0xFFE6E8F0),
+                surfaceContainer = Color(0xFF191B23), surfaceContainerHigh = Color(0xFF1D2029),
+                background = Color(0xFF0A0B10), onBackground = Color(0xFFE6E8F0)
+            ) else lightColorScheme(
+                surface = Color(0xFFF7F8FE), onSurface = Color(0xFF12141C),
+                surfaceContainer = Color(0xFFEDEFF9), surfaceContainerHigh = Color(0xFFE8EBF7),
+                background = Color(0xFFF2F4FB), onBackground = Color(0xFF12141C)
+            )
+            val base = if (darkTheme) DarkPal else LightPal
+            val pal = if (dyn != null) materialYouPal(dyn, base) else base
+            MaterialTheme(typography = appTypography(), colorScheme = scheme) {
+                CompositionLocalProvider(LocalPal provides pal) {
+                    App(controller.value, inPip.value, openReq.value, themeMode.intValue, themeStyle.intValue,
+                        { m, st ->
+                            themeMode.intValue = m; themeStyle.intValue = st
+                            themeStore.setThemeMode(m); themeStore.setThemeStyle(st)
+                        }) { enterPip() }
                 }
             }
         }
@@ -301,6 +318,83 @@ val LightPal = Pal(
     Color(0xFF3F4BD6), Color(0xFF3F4BD6)
 )
 val LocalPal = staticCompositionLocalOf { DarkPal }
+
+// ألوان Material You الديناميكية (أندرويد 12+) من خلفية الجوال، وتنرجع null على الأجهزة الأقدم
+fun dynamicScheme(ctx: Context, dark: Boolean): ColorScheme? =
+    if (Build.VERSION.SDK_INT >= 31) (if (dark) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)) else null
+
+// نبني ألوان الواجهة (الخلفية، البقع، النص، النقطة) من مخطط Material You، ونبقي زجاج التطبيق كما هو
+fun materialYouPal(cs: ColorScheme, base: Pal) = Pal(
+    base.dark, cs.surface, cs.surfaceContainer,
+    cs.primary.copy(alpha = if (base.dark) 0.40f else 0.30f), cs.tertiary.copy(alpha = if (base.dark) 0.34f else 0.26f),
+    cs.onSurface, cs.onSurface.copy(alpha = 0.65f), base.glassFill, base.glassStroke,
+    cs.primary.copy(alpha = 0.22f), base.headerTint, base.rim,
+    if (base.dark) base.shim else cs.primary, cs.primary
+)
+
+// صف خيار في الإعدادات
+@Composable
+fun SettingChoice(t: String, sel: Boolean, enabled: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val pal = LocalPal.current
+    val shape = RoundedCornerShape(16.dp)
+    Box(
+        modifier.height(50.dp).glass(16.dp)
+            .then(if (sel) Modifier.background(pal.chipHi).border(1.5.dp, pal.dot.copy(0.9f), shape) else Modifier)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(t, color = pal.text.copy(alpha = if (enabled) 1f else 0.4f), fontSize = 14.sp,
+            fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal, textAlign = TextAlign.Center)
+    }
+}
+
+// صفحة الإعدادات: وضع الألوان + الثيم
+@Composable
+fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) -> Unit, onClose: () -> Unit) {
+    val pal = LocalPal.current
+    val view = androidx.compose.ui.platform.LocalView.current
+    val myOk = Build.VERSION.SDK_INT >= 31
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(pal.bg1, pal.bg2)))
+                .drawBehind {
+                    drawRect(Brush.radialGradient(listOf(pal.blob1, Color.Transparent), Offset(size.width * 0.1f, size.height * 0.05f), size.width * 0.9f))
+                    drawRect(Brush.radialGradient(listOf(pal.blob2, Color.Transparent), Offset(size.width * 0.95f, size.height * 0.95f), size.width * 0.9f))
+                }
+        ) {
+            Column(Modifier.fillMaxSize().statusBarsPadding().padding(16.dp).verticalScroll(rememberScrollState())) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(40.dp).glass(14.dp).clickable(onClick = onClose), contentAlignment = Alignment.Center) {
+                        Icon(IBack, contentDescription = null, tint = pal.text, modifier = Modifier.size(22.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Text("الإعدادات", color = pal.text, fontSize = 24.sp, fontFamily = TitleFont,
+                        fontWeight = FontWeight.Medium, letterSpacing = 1.5.sp)
+                }
+                Spacer(Modifier.height(28.dp))
+                Text("وضع الألوان", color = pal.textDim, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("حسب النظام", "فاتح", "داكن").forEachIndexed { i, t ->
+                        SettingChoice(t, mode == i, true, Modifier.weight(1f)) { if (mode != i) { buzz(view, false); onMode(i) } }
+                    }
+                }
+                Spacer(Modifier.height(28.dp))
+                Text("الثيم", color = pal.textDim, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SettingChoice("هوية التطبيق", style == 0, true, Modifier.weight(1f)) { if (style != 0) { buzz(view, false); onStyle(0) } }
+                    SettingChoice("Material You", style == 1, myOk, Modifier.weight(1f)) { if (style != 1) { buzz(view, false); onStyle(1) } }
+                }
+                if (!myOk) Text("Material You يحتاج أندرويد 12 أو أحدث", color = pal.textDim, fontSize = 12.sp,
+                    modifier = Modifier.padding(start = 4.dp, top = 10.dp))
+                else Text("ألوان الواجهة تتبع خلفية الجوال", color = pal.textDim, fontSize = 12.sp,
+                    modifier = Modifier.padding(start = 4.dp, top = 10.dp))
+            }
+        }
+    }
+}
 
 fun Modifier.glass(r: Dp = 24.dp, clipContent: Boolean = true): Modifier = composed {
     val pal = LocalPal.current
@@ -891,7 +985,7 @@ suspend fun probe(c: Channel): String = withContext(Dispatchers.IO) {
 }
 
 @Composable
-fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
+fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyle: Int, onTheme: (Int, Int) -> Unit, onPip: () -> Unit) {
     val ctx = LocalContext.current
     val act = ctx as Activity
     val store = remember { Store(ctx) }
@@ -902,6 +996,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
     var loading by remember { mutableStateOf(false) }
     var url by remember { mutableStateOf("") }
     var showAdd by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
     var playing by remember { mutableStateOf(player?.isPlaying == true) }
     var error by remember { mutableStateOf<String?>(null) }
     var full by remember { mutableStateOf(false) }
@@ -1174,8 +1269,18 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
     // كل قائمة لها ترتيبها الخاص (المفضلة = "fav")
     fun sortKey(): String = if (tab == -1) "fav" else (lists.getOrNull(mainTab) ?: "")
     // هزة عند التنقل بين القوائم
+    // الهزة فورية: عند الضغط على القائمة مباشرة، أو لما الصفحة تعدّي نصف السحب (مو بعد ما تستقر)
+    var lastTick by remember { mutableStateOf(0L) }
+    fun tick() {
+        val n = android.os.SystemClock.uptimeMillis()
+        if (n - lastTick > 350L) { lastTick = n; buzz(hapticView, false) }
+    }
     var prevTab by remember { mutableStateOf(tab) }
-    LaunchedEffect(tab) { if (tab != prevTab) { prevTab = tab; buzz(hapticView, false) } }
+    LaunchedEffect(tab) { if (tab != prevTab) { prevTab = tab; tick() } }
+    LaunchedEffect(pager) {
+        var first = true
+        snapshotFlow { pager.currentPage }.collect { if (first) first = false else tick() }
+    }
     var names by remember { mutableStateOf(store.names()) }
     var menuFor by remember { mutableStateOf(-1) }
     var renameIdx by remember { mutableStateOf(-1) }
@@ -1339,6 +1444,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     Icon(IMore, contentDescription = null, tint = pal.text, modifier = Modifier.size(22.dp))
                                 }
                                 DropdownMenu(expanded = menuMore, onDismissRequest = { menuMore = false }) {
+                                    DropdownMenuItem(text = { Text("الإعدادات") }, onClick = { menuMore = false; showSettings = true })
                                     DropdownMenuItem(text = { Text("إضافة رابط") }, onClick = { menuMore = false; showAdd = true })
                                     DropdownMenuItem(text = { Text("سحب السجل (Logs)") }, onClick = {
                                         menuMore = false
@@ -1723,6 +1829,12 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
             }) { Text("حفظ") }
         },
         dismissButton = { TextButton(onClick = { renameIdx = -1 }) { Text("إلغاء") } }
+    )
+
+    if (showSettings) SettingsDialog(
+        mode = themeMode, style = themeStyle,
+        onMode = { onTheme(it, themeStyle) }, onStyle = { onTheme(themeMode, it) },
+        onClose = { showSettings = false }
     )
 
     if (showAdd) AlertDialog(
