@@ -1007,6 +1007,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
     var zoom by remember { mutableStateOf(1f) }
     var panX by remember { mutableStateOf(0f) }
     var panY by remember { mutableStateOf(0f) }
+    var arForced by remember { mutableStateOf(false) }   // نسبة الشاشة: false = الأصلية، true = البديلة (16:9 <-> 4:3)
     val reveal = remember { Animatable(0f) }
     var origin by remember { mutableStateOf(Rect.Zero) }
     var closing by remember { mutableStateOf(false) }
@@ -1123,16 +1124,27 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
         }
     }
 
+    // معاملات تحجيم الفيديو (بمحوره المحلي) ليملأ الشاشة بالنسبة المطلوبة؛ rot = الشاشة الكاملة المدوّرة
+    fun baseScale(rot: Boolean, w: Float, h: Float): Offset {
+        val ar = if (vAr > 0f) vAr else 16f / 9f
+        val ow: Float; val oh: Float
+        if (w / h < ar) { ow = w; oh = w / ar } else { oh = h; ow = h * ar }
+        val t = if (arForced) (if (ar >= 1.55f) 4f / 3f else 16f / 9f) else ar
+        val fw = if (rot) h else w; val fh = if (rot) w else h
+        val dw: Float; val dh: Float
+        if (fw / fh < t) { dw = fw; dh = fw / t } else { dh = fh; dw = fh * t }
+        return Offset(dw / ow, dh / oh)
+    }
     // حدود تحريك الفيديو المقرّب (بإحداثيات الشاشة). لو الفيديو أصغر من الشاشة على محور يبقى في المنتصف
     fun panLimit(z: Float, w: Float, h: Float): Offset {
         val ar = if (vAr > 0f) vAr else 16f / 9f
-        val vw: Float; val vh: Float
-        if (w / h < ar) { vw = w; vh = w / ar } else { vh = h; vw = h * ar }
+        val ow: Float; val oh: Float
+        if (w / h < ar) { ow = w; oh = w / ar } else { oh = h; ow = h * ar }
         val rot = full && h > w
-        val sFull = if (rot) kotlin.math.min(h, w * ar) / kotlin.math.min(w, h * ar) else 1f
-        val k = sFull * z
-        val ex = (if (rot) vh else vw) * k
-        val ey = (if (rot) vw else vh) * k
+        val b = baseScale(rot, w, h)
+        val lx = ow * b.x * z; val ly = oh * b.y * z
+        val ex = if (rot) ly else lx
+        val ey = if (rot) lx else ly
         return Offset(((ex - w) / 2f).coerceAtLeast(0f), ((ey - h) / 2f).coerceAtLeast(0f))
     }
     // الزوم حول نقطة (f نسبة لمنتصف الشاشة): النقطة اللي تحت الإصبع تبقى مكانها
@@ -1804,13 +1816,15 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                         val fp = fpNow()
                         val w = size.width; val h = size.height
                         val portrait = h > w
-                        val ar = if (vAr > 0f) vAr else 16f / 9f
-                        // معامل التكبير عشان الفيديو يملأ الشاشة بعد التدوير
-                        val sFull = if (portrait) kotlin.math.min(h, w * ar) / kotlin.math.min(w, h * ar) else 1f
+                        // معامل التحجيم عشان الفيديو يملأ الشاشة بعد التدوير وبالنسبة المختارة (16:9 / 4:3)
+                        val b0 = baseScale(false, w, h)
+                        val b1 = if (portrait) baseScale(true, w, h) else b0
+                        val bx = b0.x + (b1.x - b0.x) * fp
+                        val by = b0.y + (b1.y - b0.y) * fp
                         // خروج من أفقي حقيقي: الفيديو ينزل ويصغر مع الإصبع
                         val q = if (!portrait && full && fpDrag >= 0f) 1f - fp else 0f
-                        val k = (1f + (sFull - 1f) * fp) * zoom * limScale.value * (1f - 0.15f * q)
-                        scaleX = k; scaleY = k
+                        val k = zoom * limScale.value * (1f - 0.15f * q)
+                        scaleX = bx * k; scaleY = by * k
                         rotationZ = (if (portrait) 90f * fp else 0f) + limShake.value * 0.12f
                         translationX = panX + fsNowX() + limShake.value; translationY = panY + q * 0.4f * h + fsNowY()
                     }
@@ -1845,7 +1859,15 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             ) {
                                 GlassIcon(IBack, Modifier.width(64.dp)) { close() }
                                 Text(cleanName(c.name), color = Color.White, maxLines = 1, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                                GlassIcon(if (isFav) IStarOn else IStarOff, Modifier.width(64.dp), if (isFav) Color(0xFFFFD60A) else Color.White) { uiTick++; toggleFav(c) }
+                                // زر نسبة الشاشة: يبدّل بين 16:9 و 4:3
+                                val arNat = if (vAr > 0f) vAr else 16f / 9f
+                                val nat169 = arNat >= 1.55f
+                                val label = if (arForced != nat169) "16:9" else "4:3"
+                                GlassButton(label, Modifier.width(64.dp)) {
+                                    uiTick++; buzz(hapticView, false)
+                                    arForced = !arForced
+                                    zoom = 1f; panX = 0f; panY = 0f
+                                }
                             }
                             Column(
                                 Modifier.align(Alignment.BottomCenter).graphicsLayer { translationY = (1f - uiAlpha) * 28.dp.toPx() }
