@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- أندرويد 12+: الجوهرة والبطاقة بدرجات من لون الجهاز (Material You) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path
+        android:pathData="M36,26 h36 a8,8 0 0 1 8,8 v40 a8,8 0 0 1 -8,8 h-36 a8,8 0 0 1 -8,-8 v-40 a8,8 0 0 1 8,-8 z"
+        android:fillColor="@android:color/system_accent1_200" android:fillAlpha="0.55"
+        android:strokeColor="@android:color/system_accent1_300" android:strokeWidth="0.8" />
+    <path android:pathData="M44,52 L60,30 L56,55 Z"
+        android:fillColor="@android:color/system_accent1_500"
+        android:strokeColor="@android:color/system_accent1_100" android:strokeWidth="0.7" android:strokeLineJoin="round" />
+    <path android:pathData="M60,30 L76,53 L56,55 Z"
+        android:fillColor="@android:color/system_accent1_400"
+        android:strokeColor="@android:color/system_accent1_100" android:strokeWidth="0.7" android:strokeLineJoin="round" />
+    <path android:pathData="M76,53 L72,61 L56,55 Z"
+        android:fillColor="@android:color/system_accent1_600"
+        android:strokeColor="@android:color/system_accent1_100" android:strokeWidth="0.7" android:strokeLineJoin="round" />
+    <path android:pathData="M72,61 L38,78 L56,55 Z"
+        android:fillColor="@android:color/system_accent1_800"
+        android:strokeColor="@android:color/system_accent1_100" android:strokeWidth="0.7" android:strokeLineJoin="round" />
+    <path android:pathData="M38,78 L44,52 L56,55 Z"
+        android:fillColor="@android:color/system_accent1_700"
+        android:strokeColor="@android:color/system_accent1_100" android:strokeWidth="0.7" android:strokeLineJoin="round" />
+    <path android:pathData="M74,36 L75.2,39.8 L79,41 L75.2,42.2 L74,46 L72.8,42.2 L69,41 L72.8,39.8 Z"
+        android:fillColor="@android:color/system_accent1_700" />
+</vector>
