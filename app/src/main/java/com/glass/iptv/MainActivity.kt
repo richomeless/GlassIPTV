@@ -1754,11 +1754,14 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             // نقطة التقريب = مكان الإصبع (نسبة لمنتصف الشاشة)
                             val anchor = Offset(second.position.x - sw / 2f, second.position.y - sh / 2f)
                             var dragged = false
+                            val vtZ = VelocityTracker()
+                            vtZ.addPointerInputChange(second)
                             var over = 0f
                             var armed = true
                             while (true) {
                                 val ev = awaitPointerEvent()
                                 val ch = ev.changes.firstOrNull { it.id == second.id } ?: break
+                                vtZ.addPointerInputChange(ch)
                                 if (!ch.pressed) break
                                 val d = ch.position - lastP
                                 lastP = ch.position
@@ -1775,6 +1778,30 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                         if (armed && over > 28.dp.toPx()) { armed = false; limitBounce() }
                                     } else { over = 0f; armed = true }
                                     ch.consume()
+                                }
+                            }
+                            // انزلاق الزوم بعد الإفلات: لو سحبت بسرعة وفلتّ، الزوم يكمل ويهدأ تدريجياً (مع بقاء نقطة الإصبع ثابتة)
+                            if (dragged) {
+                                val vz = vtZ.calculateVelocity()
+                                val rotNow = full && size.height > size.width
+                                val uVel = (if (rotNow) -vz.x else vz.y) / 450f   // سرعة تغيّر ln(zoom) بالثانية
+                                if (kotlin.math.abs(uVel) > 0.15f) {
+                                    val u0 = kotlin.math.ln(zoom)
+                                    flingJob[0]?.cancel()
+                                    flingJob[0] = scope.launch {
+                                        var zPrev = zoom
+                                        val a = Animatable(u0)
+                                        a.updateBounds(0f, kotlin.math.ln(4f))
+                                        val r = a.animateDecay(uVel, exponentialDecay<Float>()) {
+                                            val zNew = kotlin.math.exp(value).coerceIn(1f, 4f)
+                                            val np = zoomAt(zPrev, Offset(panX, panY), zNew, anchor, sw, sh)
+                                            zoom = zNew; panX = np.x; panY = np.y; zPrev = zNew
+                                        }
+                                        if (r.endReason == androidx.compose.animation.core.AnimationEndReason.BoundReached &&
+                                            kotlin.math.abs(r.endState.velocity) > 0.8f) limitBounce()
+                                        if (zoom < 1.05f) { zoom = 1f; panX = 0f; panY = 0f }
+                                    }
+                                    return@awaitEachGesture
                                 }
                             }
                             // رجعنا تقريباً للحجم الطبيعي: نثبّته على 1 بالضبط عشان إيماءة الشاشة الكاملة ما تتعطل
