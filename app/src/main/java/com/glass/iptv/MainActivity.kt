@@ -1334,13 +1334,23 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
     var renameText by remember { mutableStateOf("") }
     // لمعة الهيدر: حلقة إطارات تشتغل فقط وأنت في الواجهة الرئيسية
     var shT by remember { mutableStateOf(0f) }
+    // تذبذب نور النجمة: يقوى ويضعف بشكل غير منتظم مثل نجم يتلألأ في الفضاء (0.18 ضعيف .. 1 قوي)
+    var twk by remember { mutableStateOf(1f) }
     LaunchedEffect(cur == null) {
         if (cur == null) {
             val t0 = withFrameNanos { it }
             while (true) {
                 val t = withFrameNanos { it }
-                val ph = ((t - t0) / 1_000_000L) % 16000L
+                val ms = (t - t0) / 1_000_000L
+                val ph = ms % 16000L
                 shT = if (ph < 12000L) ph / 12000f else 1f
+                val sec = ms / 1000.0
+                val tau = 2.0 * Math.PI
+                // ثلاث موجات بترددات غير متناسبة فلا يتكرر النمط بشكل واضح
+                val v = 0.60 + 0.24 * Math.sin(tau * sec / 2.3) +
+                    0.13 * Math.sin(tau * sec / 0.83 + 1.3) +
+                    0.07 * Math.sin(tau * sec / 0.31 + 2.1)
+                twk = v.toFloat().coerceIn(0.18f, 1f)
             }
         }
     }
@@ -1471,12 +1481,14 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                 drawCircle(hc2.a((1f - f) * 0.4f), radius = (1.6f - f * 0.9f).dp.toPx(), center = sp)
                             }
                             val c0 = Offset(hx, yb)
-                            val pulse = 1f + 0.06f * kotlin.math.sin(shT * 18f)
-                            val halo = 16.dp.toPx()
-                            drawCircle(Brush.radialGradient(listOf(hc.a(0.28f), Color.Transparent), center = c0, radius = halo),
+                            // تلألؤ النجمة: الشدة والحجم يتغيران معاً مع twk
+                            val tw = twk
+                            val pulse = (0.8f + 0.35f * tw)
+                            val halo = 16.dp.toPx() * (0.75f + 0.5f * tw)
+                            drawCircle(Brush.radialGradient(listOf(hc.a(0.28f * (0.35f + 0.65f * tw)), Color.Transparent), center = c0, radius = halo),
                                 radius = halo, center = c0)
                             val core = 6.dp.toPx() * pulse
-                            drawCircle(Brush.radialGradient(listOf(pal.shim.a(0.85f), hc.a(0.5f), Color.Transparent), center = c0, radius = core),
+                            drawCircle(Brush.radialGradient(listOf(pal.shim.a(0.85f * (0.25f + 0.75f * tw)), hc.a(0.5f * (0.3f + 0.7f * tw)), Color.Transparent), center = c0, radius = core),
                                 radius = core, center = c0)
                         }
                     })
