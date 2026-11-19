@@ -138,14 +138,15 @@ class Store(ctx: Context) {
     fun names(): Map<String, String> = (p.getString("pn", "") ?: "").split("\n").filter { it.contains("\t") }
         .associate { val i = it.indexOf('\t'); it.substring(0, i) to it.substring(i + 1) }
     fun saveNames(m: Map<String, String>) = p.edit().putString("pn", m.entries.joinToString("\n") { "${it.key}\t${it.value}" }).apply()
-    fun sortMode(): Int = p.getInt("sort", 0)
-    fun setSortMode(m: Int) = p.edit().putInt("sort", m).apply()
-    fun recents(): Map<String, Long> = (p.getString("rec", "") ?: "").split("\n").filter { it.contains("\t") }
-        .mapNotNull { line -> val i = line.indexOf('\t'); line.substring(i + 1).toLongOrNull()?.let { t -> line.substring(0, i) to t } }.toMap()
-    fun touchRecent(url: String) {
-        val m = recents().toMutableMap(); m[url] = System.currentTimeMillis()
-        val keep = m.entries.sortedByDescending { it.value }.take(400)
-        p.edit().putString("rec", keep.joinToString("\n") { "${it.key}\t${it.value}" }).apply()
+    // ترتيب خاص لكل قائمة: المفتاح "fav" للمفضلة أو رابط القائمة. 0 أبجدي، 1 الأكثر تشغيلاً
+    fun sorts(): Map<String, Int> = (p.getString("sorts", "") ?: "").split("\n").filter { it.contains("\t") }
+        .mapNotNull { l -> val i = l.lastIndexOf('\t'); l.substring(i + 1).toIntOrNull()?.let { m -> l.substring(0, i) to m } }.toMap()
+    fun saveSorts(m: Map<String, Int>) = p.edit().putString("sorts", m.entries.joinToString("\n") { "${it.key}\t${it.value}" }).apply()
+    fun counts(): Map<String, Int> = (p.getString("cnt", "") ?: "").split("\n").filter { it.contains("\t") }
+        .mapNotNull { l -> val i = l.lastIndexOf('\t'); l.substring(i + 1).toIntOrNull()?.let { n -> l.substring(0, i) to n } }.toMap()
+    fun bumpCount(url: String) {
+        val m = counts().toMutableMap(); m[url] = (m[url] ?: 0) + 1
+        p.edit().putString("cnt", m.entries.joinToString("\n") { "${it.key}\t${it.value}" }).apply()
     }
     fun pipMode(): Boolean = p.getBoolean("pip", true)
     fun setPipMode(b: Boolean) = p.edit().putBoolean("pip", b).apply()
@@ -176,15 +177,24 @@ class MainActivity : ComponentActivity() {
         f.addListener({ controller.value = f.get() }, MoreExecutors.directExecutor())
         future = f
         setContent {
-            // ثيم داكن عشان القوائم المنبثقة والحوارات تطلع بخلفية داكنة
+            // الثيم يتبع ثيم الجوال تلقائياً (داكن/فاتح)
+            val darkTheme = isSystemInDarkTheme()
             MaterialTheme(
                 typography = appTypography(),
-                colorScheme = darkColorScheme(
+                colorScheme = if (darkTheme) darkColorScheme(
                     surface = Color(0xFF14161D), onSurface = Color(0xFFE6E8F0),
                     surfaceContainer = Color(0xFF191B23), surfaceContainerHigh = Color(0xFF1D2029),
                     background = Color(0xFF0A0B10), onBackground = Color(0xFFE6E8F0)
+                ) else lightColorScheme(
+                    surface = Color(0xFFF7F8FE), onSurface = Color(0xFF12141C),
+                    surfaceContainer = Color(0xFFEDEFF9), surfaceContainerHigh = Color(0xFFE8EBF7),
+                    background = Color(0xFFF2F4FB), onBackground = Color(0xFF12141C)
                 )
-            ) { App(controller.value, inPip.value, openReq.value) { enterPip() } }
+            ) {
+                CompositionLocalProvider(LocalPal provides (if (darkTheme) DarkPal else LightPal)) {
+                    App(controller.value, inPip.value, openReq.value) { enterPip() }
+                }
+            }
         }
     }
 
@@ -263,10 +273,39 @@ fun ambientEffect(radius: Float): androidx.compose.ui.graphics.RenderEffect {
     return android.graphics.RenderEffect.createChainEffect(sat, blur).asComposeRenderEffect()
 }
 
-fun Modifier.glass(r: Dp = 24.dp, clipContent: Boolean = true): Modifier {
+// ألوان الواجهة: داكن وفاتح (يتبدلون تلقائياً حسب ثيم الجوال). المشغّل دايماً داكن.
+class Pal(
+    val dark: Boolean,
+    val bg1: Color, val bg2: Color, val blob1: Color, val blob2: Color,
+    val text: Color, val textDim: Color,
+    val glassFill: Brush, val glassStroke: Brush,
+    val chipHi: Color, val headerTint: Brush, val rim: Brush,
+    val shim: Color, val dot: Color
+)
+val DarkPal = Pal(
+    true, Color(0xFF040508), Color(0xFF0C0E18), Color(0x664B3AA8), Color(0x550A6C94),
+    Color.White, Color.White.copy(0.65f), GlassFill, GlassStroke,
+    Color.White.copy(0.22f),
+    Brush.verticalGradient(listOf(Color.White.copy(0.20f), Color.White.copy(0.07f))),
+    Brush.horizontalGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.12f), Color.White.copy(0.45f))),
+    Color.White, Color.White
+)
+val LightPal = Pal(
+    false, Color(0xFFF2F4FB), Color(0xFFE3E7F6), Color(0x558C7BFF), Color(0x4458B6E8),
+    Color(0xFF12141C), Color(0xFF12141C).copy(0.6f),
+    Brush.linearGradient(listOf(Color.White.copy(0.80f), Color.White.copy(0.42f))),
+    Brush.linearGradient(listOf(Color.White.copy(0.95f), Color(0xFF8E98BD).copy(0.30f), Color.White.copy(0.75f))),
+    Color(0xFF5B6CFF).copy(0.20f),
+    Brush.verticalGradient(listOf(Color.White.copy(0.62f), Color.White.copy(0.36f))),
+    Brush.horizontalGradient(listOf(Color(0xFF8E98BD).copy(0.55f), Color(0xFF8E98BD).copy(0.15f), Color(0xFF8E98BD).copy(0.45f))),
+    Color(0xFF3F4BD6), Color(0xFF3F4BD6)
+)
+val LocalPal = staticCompositionLocalOf { DarkPal }
+
+fun Modifier.glass(r: Dp = 24.dp, clipContent: Boolean = true): Modifier = composed {
+    val pal = LocalPal.current
     val shape = RoundedCornerShape(r)
-    val m = if (clipContent) this.clip(shape) else this
-    return m.background(GlassFill, shape).border(1.dp, GlassStroke, shape)
+    (if (clipContent) Modifier.clip(shape) else Modifier).background(pal.glassFill, shape).border(1.dp, pal.glassStroke, shape)
 }
 
 // هزة خفيفة: نجرب هزة النظام أول، وإذا ما اشتغلت نجرب الاهتزاز المباشر
@@ -546,15 +585,16 @@ fun GlassIcon(icon: ImageVector, modifier: Modifier = Modifier, tint: Color = Co
 @Composable
 fun Chip(text: String, sel: () -> Float, modifier: Modifier = Modifier, onLong: () -> Unit = {}, onClick: () -> Unit) {
     // نفس الارتفاع ونفس الشكل لكل الأزرار، والتحديد تظليل حي يتبع السحب (يُقرأ وقت الرسم بس)
+    val pal = LocalPal.current
     Box(
         modifier.height(40.dp).glass(14.dp)
             .drawBehind {
-                drawRoundRect(Color.White.copy(alpha = 0.22f * sel().coerceIn(0f, 1f)), cornerRadius = CornerRadius(14.dp.toPx()))
+                drawRoundRect(pal.chipHi.copy(alpha = pal.chipHi.alpha * sel().coerceIn(0f, 1f)), cornerRadius = CornerRadius(14.dp.toPx()))
             }
             .combinedClickable(onClick = onClick, onLongClick = onLong)
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center
-    ) { Text(text, color = Color.White, maxLines = 1, fontSize = 14.sp) }
+    ) { Text(text, color = pal.text, maxLines = 1, fontSize = 14.sp) }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -572,7 +612,7 @@ fun Tile(c: Channel, fav: Boolean, onLong: () -> Unit, onClick: (Rect) -> Unit) 
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f).onGloballyPositioned { holder[0] = it }.glass(22.dp, clipContent = false),
             contentAlignment = Alignment.Center) {
-            if (c.logo.isEmpty()) Text(c.name.take(1), color = Color.White, fontSize = 28.sp)
+            if (c.logo.isEmpty()) Text(c.name.take(1), color = LocalPal.current.text, fontSize = 28.sp)
             else {
                 // نصغّر الشعار وقت فك الضغط عشان التمرير يبقى سلس
                 val req = remember(c.logo) { ImageRequest.Builder(ctx).data(c.logo).size(180).crossfade(false).build() }
@@ -583,7 +623,7 @@ fun Tile(c: Channel, fav: Boolean, onLong: () -> Unit, onClick: (Rect) -> Unit) 
                 modifier = Modifier.align(Alignment.TopEnd).padding(6.dp))
         }
         // سطرين دايماً عشان كل الصفوف بنفس الارتفاع
-        Text(cleanName(c.name), color = Color.White.copy(0.9f), fontSize = 12.sp, maxLines = 2, minLines = 2,
+        Text(cleanName(c.name), color = LocalPal.current.text.copy(0.9f), fontSize = 12.sp, maxLines = 2, minLines = 2,
             textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
     }
 }
@@ -753,11 +793,10 @@ fun AmbientGlow(pv: PlayerView?, ar: Float, modifier: Modifier = Modifier) {
         })
 }
 
-// ترتيب القنوات: 0 الأصلي، 1 أبجدي، 2 آخر ما شغّلته
-fun sortChannels(list: List<Channel>, mode: Int, rec: Map<String, Long>): List<Channel> = when (mode) {
-    1 -> list.sortedBy { cleanName(it.name).lowercase() }
-    2 -> list.sortedWith(compareByDescending<Channel> { rec[it.url] ?: 0L }.thenBy { cleanName(it.name).lowercase() })
-    else -> list
+// ترتيب القنوات: 0 أبجدي، 1 الأكثر تشغيلاً
+fun sortChannels(list: List<Channel>, mode: Int, counts: Map<String, Int>): List<Channel> = when (mode) {
+    1 -> list.sortedWith(compareByDescending<Channel> { counts[it.url] ?: 0 }.thenBy { cleanName(it.name).lowercase() })
+    else -> list.sortedBy { cleanName(it.name).lowercase() }
 }
 
 // اسم القناة للعرض: نشيل أي شي بين أقواس (1080p) أو [Not 24/7] ونخلي الاسم فقط
@@ -992,7 +1031,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
         if (closing) return
         error = null; qSel = null; vh = 0; ui = true; zoom = 1f; panX = 0f; panY = 0f
         Hdr.ref = c.ref; Hdr.ua = c.ua
-        store.touchRecent(c.url)
+        store.bumpCount(c.url)
         val dm = ctx.resources.displayMetrics
         val cx = dm.widthPixels / 2f; val cy = dm.heightPixels / 2f
         origin = if (from != null && from.width > 0f) from else Rect(cx - 80f, cy - 80f, cx + 80f, cy + 80f)
@@ -1121,20 +1160,22 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
         return
     }
 
+    val pal = LocalPal.current
     val favUrls = remember(favs) { favs.map { it.url }.toHashSet() }
     val hh = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 112.dp
     val layer = rememberGraphicsLayer()
     val frost = remember { if (Build.VERSION.SDK_INT >= 31) frostEffect(110f) else null }
     var menuMore by remember { mutableStateOf(false) }
     var menuSort by remember { mutableStateOf(false) }
-    var sortMode by remember { mutableStateOf(store.sortMode()) }
-    var recents by remember { mutableStateOf(store.recents()) }
-    // آخر ما شغّلته يتحدّث لما ترجع للقائمة (عشان ما تتحرك البطاقات وأنت داخل قناة)
-    LaunchedEffect(cur == null) { if (cur == null) recents = store.recents() }
-    var lastSortApplied by remember { mutableStateOf(sortMode) }
-    LaunchedEffect(sortMode) {
-        if (sortMode != lastSortApplied) { lastSortApplied = sortMode; gridState.scrollToItem(0); favState.scrollToItem(0) }
-    }
+    var sorts by remember { mutableStateOf(store.sorts()) }
+    var counts by remember { mutableStateOf(store.counts()) }
+    // عدد مرات التشغيل يتحدّث لما ترجع للقائمة (عشان ما تتحرك البطاقات وأنت داخل قناة)
+    LaunchedEffect(cur == null) { if (cur == null) counts = store.counts() }
+    // كل قائمة لها ترتيبها الخاص (المفضلة = "fav")
+    fun sortKey(): String = if (tab == -1) "fav" else (lists.getOrNull(mainTab) ?: "")
+    // هزة عند التنقل بين القوائم
+    var prevTab by remember { mutableStateOf(tab) }
+    LaunchedEffect(tab) { if (tab != prevTab) { prevTab = tab; buzz(hapticView, false) } }
     var names by remember { mutableStateOf(store.names()) }
     var menuFor by remember { mutableStateOf(-1) }
     var renameIdx by remember { mutableStateOf(-1) }
@@ -1152,6 +1193,11 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
         }
     }
     val c = cur
+    SideEffect {
+        val ic = WindowCompat.getInsetsController(act.window, act.window.decorView)
+        ic.isAppearanceLightStatusBars = !pal.dark && cur == null
+        ic.isAppearanceLightNavigationBars = !pal.dark && cur == null
+    }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         Box(Modifier.fillMaxSize().graphicsLayer {
@@ -1161,16 +1207,16 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
             val k = 1f - 0.07f * p
             scaleX = k; scaleY = k; alpha = 1f - 0.6f * p
         }) {
-            Box(Modifier.fillMaxSize().background(Color(0xFF040508))) {
+            Box(Modifier.fillMaxSize().background(pal.bg1)) {
                 // الخلفية والقنوات كلها تتسجل في طبقة وحدة، وتنرسم تحت الهيدر فقط
                 Box(Modifier.fillMaxSize().drawWithContent {
                     layer.record { this@drawWithContent.drawContent() }
                     clipRect(top = hh.toPx()) { drawLayer(layer) }
                 }) {
-                    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF040508), Color(0xFF0C0E18)))))
+                    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(pal.bg1, pal.bg2))))
                     Box(Modifier.fillMaxSize().drawBehind {
-                        drawRect(Brush.radialGradient(listOf(Color(0x664B3AA8), Color.Transparent), Offset(size.width * 0.1f, size.height * 0.05f), size.width * 0.9f))
-                        drawRect(Brush.radialGradient(listOf(Color(0x550A6C94), Color.Transparent), Offset(size.width * 0.95f, size.height * 0.95f), size.width * 0.9f))
+                        drawRect(Brush.radialGradient(listOf(pal.blob1, Color.Transparent), Offset(size.width * 0.1f, size.height * 0.05f), size.width * 0.9f))
+                        drawRect(Brush.radialGradient(listOf(pal.blob2, Color.Transparent), Offset(size.width * 0.95f, size.height * 0.95f), size.width * 0.9f))
                     })
                     HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()
                         .pointerInput(Unit) {
@@ -1195,8 +1241,9 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                             }
                         }, beyondViewportPageCount = 1) { page ->
                         val isFavPage = page == 0
-                        val shownList = remember(isFavPage, favs, channels, sortMode, recents) {
-                            sortChannels(if (isFavPage) favs else channels, sortMode, recents)
+                        val smode = sorts[if (isFavPage) "fav" else (lists.getOrNull(mainTab) ?: "")] ?: 0
+                        val shownList = remember(isFavPage, favs, channels, smode, counts) {
+                            sortChannels(if (isFavPage) favs else channels, smode, counts)
                         }
                         Box(Modifier.fillMaxSize()) {
                             LazyVerticalGrid(
@@ -1211,9 +1258,9 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                     Tile(ch, ch.url in favUrls, onLong = { toggleFav(ch) }) { r -> start(ch, r) }
                                 }
                             }
-                            if (isFavPage && favs.isEmpty()) Text("اضغط مطولاً على أي قناة لإضافتها للمفضلة", color = Color.White.copy(0.6f),
+                            if (isFavPage && favs.isEmpty()) Text("اضغط مطولاً على أي قناة لإضافتها للمفضلة", color = pal.textDim,
                                 textAlign = TextAlign.Center, modifier = Modifier.align(Alignment.Center).padding(32.dp))
-                            else if (!isFavPage && loading) Text("جاري التحميل...", color = Color.White.copy(0.7f),
+                            else if (!isFavPage && loading) Text("جاري التحميل...", color = pal.textDim,
                                 modifier = Modifier.align(Alignment.Center))
                         }
                     }
@@ -1223,7 +1270,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                     Box(Modifier.fillMaxSize()
                         .graphicsLayer { renderEffect = frost; clip = true }
                         .drawBehind { drawLayer(layer) })
-                    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.White.copy(0.20f), Color.White.copy(0.07f)))))
+                    Box(Modifier.fillMaxSize().background(pal.headerTint))
                     // حافة الهيدر السفلية: مذنّب متوهج متغير الألوان وذيل يتلاشى
                     Box(Modifier.align(Alignment.BottomCenter).offset(y = 30.dp).fillMaxWidth().height(60.dp).drawBehind {
                         val yb = size.height / 2f
@@ -1237,7 +1284,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                         val hc = Color.hsv(hue, 0.55f, 1f)
                         val hc2 = Color.hsv((hue + 70f) % 360f, 0.6f, 1f)
                         // الخط الأساسي
-                        drawRect(Brush.horizontalGradient(listOf(Color.White.copy(0.55f), Color.White.copy(0.12f), Color.White.copy(0.45f))),
+                        drawRect(pal.rim,
                             topLeft = Offset(0f, yb - 1.dp.toPx()), size = Size(size.width, 2.dp.toPx()))
                         // مذنّب صغير وناعم: يظهر تدريجياً من الربع ويتلاشى قبل نهاية الخط، وألوانه تتغير ببطء
                         fun Color.a(x: Float) = copy(alpha = alpha * x * env)
@@ -1250,7 +1297,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                         }
                         if (env > 0.002f) {
                             drawPath(taper(14.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc.a(0.05f), hc2.a(0.14f)), startX = hx - tl, endX = hx))
-                            drawPath(taper(5.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc2.a(0.28f), Color.White.a(0.6f)), startX = hx - tl, endX = hx))
+                            drawPath(taper(5.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc2.a(0.28f), pal.shim.a(0.6f)), startX = hx - tl, endX = hx))
                             for (i in 1..4) {
                                 val f = i / 5f
                                 val sp = Offset(hx - tl * f * 0.8f, yb + kotlin.math.sin(shT * 14f + i * 2.1f) * 4.dp.toPx() * f)
@@ -1262,24 +1309,26 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                             drawCircle(Brush.radialGradient(listOf(hc.a(0.28f), Color.Transparent), center = c0, radius = halo),
                                 radius = halo, center = c0)
                             val core = 6.dp.toPx() * pulse
-                            drawCircle(Brush.radialGradient(listOf(Color.White.a(0.85f), hc.a(0.5f), Color.Transparent), center = c0, radius = core),
+                            drawCircle(Brush.radialGradient(listOf(pal.shim.a(0.85f), hc.a(0.5f), Color.Transparent), center = c0, radius = core),
                                 radius = core, center = c0)
                         }
                     })
                     Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Glass IPTV", color = Color.White.copy(alpha = 0.88f), fontSize = 27.sp, fontFamily = TitleFont,
+                            Text("Glass IPTV", color = pal.text.copy(alpha = 0.88f), fontSize = 27.sp, fontFamily = TitleFont,
                                 fontWeight = FontWeight.Medium, letterSpacing = 2.sp,
                                 modifier = Modifier.padding(vertical = 10.dp).logoShimmer())
                             Spacer(Modifier.weight(1f))
                             Box {
                                 Box(Modifier.size(40.dp).glass(14.dp).clickable { menuSort = true }, contentAlignment = Alignment.Center) {
-                                    Icon(ISort, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                                    Icon(ISort, contentDescription = null, tint = pal.text, modifier = Modifier.size(22.dp))
                                 }
                                 DropdownMenu(expanded = menuSort, onDismissRequest = { menuSort = false }) {
-                                    listOf("الترتيب الأصلي", "أبجدي (A-Z)", "آخر ما شغّلته").forEachIndexed { i, t ->
-                                        DropdownMenuItem(text = { Text(if (sortMode == i) "✓  $t" else t) }, onClick = {
-                                            sortMode = i; store.setSortMode(i); menuSort = false
+                                    listOf("أبجدي (A-Z)", "الأكثر تشغيلاً").forEachIndexed { i, t ->
+                                        DropdownMenuItem(text = { Text(if ((sorts[sortKey()] ?: 0) == i) "✓  $t" else t) }, onClick = {
+                                            val k = sortKey()
+                                            sorts = sorts + (k to i); store.saveSorts(sorts); menuSort = false
+                                            scope.launch { (if (tab == -1) favState else gridState).scrollToItem(0) }
                                         })
                                     }
                                 }
@@ -1287,7 +1336,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                             Spacer(Modifier.width(8.dp))
                             Box {
                                 Box(Modifier.size(40.dp).glass(14.dp).clickable { menuMore = true }, contentAlignment = Alignment.Center) {
-                                    Icon(IMore, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                                    Icon(IMore, contentDescription = null, tint = pal.text, modifier = Modifier.size(22.dp))
                                 }
                                 DropdownMenu(expanded = menuMore, onDismissRequest = { menuMore = false }) {
                                     DropdownMenuItem(text = { Text("إضافة رابط") }, onClick = { menuMore = false; showAdd = true })
@@ -1354,15 +1403,16 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                                 val extra = kotlin.math.abs((chipX[mainTab] ?: 0f) - mainX).coerceAtMost(160f)
                                 val w = 16.dp.toPx() + moving * 36.dp.toPx() + extra * 0.4f
                                 val h = 5.dp.toPx()
-                                drawRoundRect(Color.White.copy(0.28f), Offset(x - w / 2f - 3.dp.toPx(), 1.dp.toPx()),
+                                drawRoundRect(pal.dot.copy(0.28f), Offset(x - w / 2f - 3.dp.toPx(), 1.dp.toPx()),
                                     Size(w + 6.dp.toPx(), h + 4.dp.toPx()), CornerRadius(h))
-                                drawRoundRect(Color.White.copy(0.95f), Offset(x - w / 2f, 3.dp.toPx()), Size(w, h), CornerRadius(h / 2f))
+                                drawRoundRect(pal.dot.copy(0.95f), Offset(x - w / 2f, 3.dp.toPx()), Size(w, h), CornerRadius(h / 2f))
                             })
                     }
                 }
             }
         }
 
+        CompositionLocalProvider(LocalPal provides DarkPal) {
         if (c != null) {
             val isFav = favs.any { it.url == c.url }
             Box(
@@ -1655,6 +1705,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, onPip: () -> Unit) {
                 }
               }
             }
+        }
         }
     }
 
