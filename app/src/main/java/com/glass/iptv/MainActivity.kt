@@ -1784,15 +1784,15 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             if (dragged) {
                                 val vz = vtZ.calculateVelocity()
                                 val rotNow = full && size.height > size.width
-                                val uVel = (if (rotNow) -vz.x else vz.y) / 450f   // سرعة تغيّر ln(zoom) بالثانية
-                                if (kotlin.math.abs(uVel) > 0.15f) {
+                                val uVel = (if (rotNow) -vz.x else vz.y) / 450f * 0.45f   // سرعة تغيّر ln(zoom) بالثانية (مخفّفة)
+                                if (kotlin.math.abs(uVel) > 0.1f) {
                                     val u0 = kotlin.math.ln(zoom)
                                     flingJob[0]?.cancel()
                                     flingJob[0] = scope.launch {
                                         var zPrev = zoom
                                         val a = Animatable(u0)
                                         a.updateBounds(0f, kotlin.math.ln(4f))
-                                        val r = a.animateDecay(uVel, exponentialDecay<Float>()) {
+                                        val r = a.animateDecay(uVel, exponentialDecay<Float>(frictionMultiplier = 1.8f)) {
                                             val zNew = kotlin.math.exp(value).coerceIn(1f, 4f)
                                             val np = zoomAt(zPrev, Offset(panX, panY), zNew, anchor, sw, sh)
                                             zoom = zNew; panX = np.x; panY = np.y; zPrev = zNew
