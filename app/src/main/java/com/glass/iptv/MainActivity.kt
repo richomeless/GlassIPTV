@@ -1325,26 +1325,41 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                     })
                     HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()
                         .pointerInput(Unit) {
-                            // الواجهة الرئيسية: نلغي السحب لليسار (عكس المفضلة) عشان ما يتداخل مع التمرير للأسفل
+                            // التنقل بين القائمة والمفضلة: نتحكم فيه بأنفسنا. ما يبدأ إلا لو السحب أفقي بوضوح،
+                            // وأي سحب مائل (حتى لو مال الإصبع) يعتبر تمرير عمودي للقائمة
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                                if (pager.settledPage != 1 || pager.isScrollInProgress) return@awaitEachGesture
-                                var blocking = false
+                                if (pager.isScrollInProgress) return@awaitEachGesture
+                                val vt = VelocityTracker()
+                                vt.addPointerInputChange(down)
+                                var decided = false
+                                var horiz = false
+                                var last = down.position
                                 while (true) {
                                     val ev = awaitPointerEvent(PointerEventPass.Initial)
                                     val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
                                     if (!ch.pressed) break
+                                    vt.addPointerInputChange(ch)
                                     val tot = ch.position - down.position
-                                    if (!blocking) {
+                                    if (!decided) {
                                         if (tot.getDistance() <= viewConfiguration.touchSlop) continue
-                                        // أي حركة فيها ميل لليسار تنلغي؛ الحركة العمودية الصريحة تمر للقائمة تتمرر عادي
-                                        blocking = tot.x < 0f && kotlin.math.abs(tot.x) * 2f > kotlin.math.abs(tot.y)
-                                        if (!blocking) break
+                                        decided = true
+                                        val page = pager.currentPage
+                                        val dirOk = (page == 1 && tot.x > 0f) || (page == 0 && tot.x < 0f)
+                                        horiz = dirOk && kotlin.math.abs(tot.x) > kotlin.math.abs(tot.y) * 2.2f
+                                        if (!horiz) break   // عمودي أو مائل: القائمة تتمرر عادي
                                     }
+                                    pager.dispatchRawDelta(-(ch.position.x - last.x))
+                                    last = ch.position
                                     ch.consume()
                                 }
+                                if (horiz) {
+                                    val vx = vt.calculateVelocity().x
+                                    val target = if (vx > 700f) 0 else if (vx < -700f) 1 else pager.currentPage
+                                    scope.launch { pager.animateScrollToPage(target) }
+                                }
                             }
-                        }, beyondViewportPageCount = 1) { page ->
+                        }, userScrollEnabled = false, beyondViewportPageCount = 1) { page ->
                         val isFavPage = page == 0
                         val smode = sorts[if (isFavPage) "fav" else (lists.getOrNull(mainTab) ?: "")] ?: 0
                         val shownList = remember(isFavPage, favs, channels, smode, counts) {
