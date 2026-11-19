@@ -1632,6 +1632,9 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             // الربع السفلي من الشاشة (منطقة إيماءة الخروج من التطبيق) ما يفعّل الشاشة الكاملة
                             val blockUp = !full && down.position.y > size.height * 0.86f
                             var prog = if (full) 1f else 0f
+                            // هزات برايل: نقطة بنفس الشدة كل مسافة ثابتة من السحب (بدون تصاعد)، نزولاً وصعوداً
+                            val brStep = 26.dp.toPx()
+                            var brIdx = 0
                             while (true) {
                                 val ev = awaitPointerEvent()
                                 val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
@@ -1681,6 +1684,16 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                     prog = if (mode == 1) (-ay / dist).coerceIn(0f, 1f) else 1f - ((if (rot) maxOf(ay, tot.y) else ay) / dist).coerceIn(0f, 1f)
                                     fpDrag = prog
                                     ch.consume()
+                                }
+                                if (mode != 0) {
+                                    // المسافة المقطوعة من نقطة البداية حسب نوع السحب؛ كل تغيّر في رقم النقطة = هزة وحدة
+                                    val travel = when (mode) {
+                                        1 -> (-ay).coerceAtLeast(0f)
+                                        3 -> ay.coerceAtLeast(0f)
+                                        else -> maxOf(kotlin.math.abs(tot.x), kotlin.math.abs(tot.y))
+                                    }
+                                    val idx = (travel / brStep).toInt()
+                                    if (idx != brIdx) { brIdx = idx; buzz(hapticView, false) }
                                 }
                                 lastPos = ch.position
                             }
