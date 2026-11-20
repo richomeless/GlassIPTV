@@ -520,7 +520,7 @@ fun scrollTick(v: View) {
 
 // سكرول أقوى وانزلاق أطول: السحبة القوية تنزل أسرع، والفرملة تدريجية بدون توقف مفاجئ
 class GlideFling(
-    private val decay: DecayAnimationSpec<Float> = exponentialDecay(frictionMultiplier = 0.55f, absoluteVelocityThreshold = 30f)
+    private val decay: DecayAnimationSpec<Float> = exponentialDecay(frictionMultiplier = 0.55f)
 ) : FlingBehavior {
     override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
         if (kotlin.math.abs(initialVelocity) <= 1f) return initialVelocity
@@ -532,7 +532,7 @@ class GlideFling(
             val consumed = scrollBy(delta)
             lastValue = value
             left = velocity
-            if (kotlin.math.abs(delta - consumed) > 0.5f) cancelAnimation()
+            if (kotlin.math.abs(delta - consumed) > 0.5f || kotlin.math.abs(velocity) < 30f) cancelAnimation()
         }
         return left
     }
