@@ -158,7 +158,7 @@ class Store(ctx: Context) {
     // وضع الألوان: 0 حسب النظام، 1 فاتح، 2 داكن
     fun themeMode(): Int = p.getInt("tmode", 0)
     fun setThemeMode(m: Int) = p.edit().putInt("tmode", m).apply()
-    // الثيم: 0 هوية التطبيق، 1 Material You
+    // الثيم: 0 هوية التطبيق، 1 Material You، 2 أحادي اللون
     fun themeStyle(): Int = p.getInt("tstyle", 0)
     fun setThemeStyle(m: Int) = p.edit().putInt("tstyle", m).apply()
     // القنوات اللي المستخدم بدّل نسبة شاشتها (16:9 <-> 4:3): كل قناة تتذكر اختيارها لحالها
@@ -213,7 +213,8 @@ class MainActivity : ComponentActivity() {
             val darkTheme = when (themeMode.intValue) { 1 -> false; 2 -> true; else -> isSystemInDarkTheme() }
             val appCtx = LocalContext.current
             val dyn = if (themeStyle.intValue == 1) dynamicScheme(appCtx, darkTheme) else null
-            val scheme = dyn ?: if (darkTheme) darkColorScheme(
+            val mono = themeStyle.intValue == 2
+            val scheme = dyn ?: if (mono) monoScheme(darkTheme) else if (darkTheme) darkColorScheme(
                 surface = Color(0xFF14161D), onSurface = Color(0xFFE6E8F0),
                 surfaceContainer = Color(0xFF191B23), surfaceContainerHigh = Color(0xFF1D2029),
                 background = Color(0xFF0A0B10), onBackground = Color(0xFFE6E8F0)
@@ -223,7 +224,7 @@ class MainActivity : ComponentActivity() {
                 background = Color(0xFFF2F4FB), onBackground = Color(0xFF12141C)
             )
             val base = if (darkTheme) DarkPal else LightPal
-            val pal = if (dyn != null) materialYouPal(dyn, base) else base
+            val pal = if (dyn != null) materialYouPal(dyn, base) else if (mono) monoPal(darkTheme) else base
             MaterialTheme(typography = appTypography(), colorScheme = scheme) {
                 CompositionLocalProvider(LocalPal provides pal) {
                     App(controller.value, inPip.value, openReq.value, themeMode.intValue, themeStyle.intValue,
@@ -353,9 +354,55 @@ fun materialYouPal(cs: ColorScheme, base: Pal) = Pal(
     if (base.dark) base.shim else cs.primary, cs.primary
 )
 
+// ثيم أحادي اللون: أبيض وأسود ورمادي فقط، بدون أي لون. زجاج التطبيق نفسه بس بدرجات رمادية
+fun monoPal(dark: Boolean): Pal = if (dark) Pal(
+    true, Color(0xFF000000), Color(0xFF0E0E0E), Color(0x30FFFFFF), Color(0x1EFFFFFF),
+    Color(0xFFF2F2F2), Color(0xFFF2F2F2).copy(0.62f), GlassFill, GlassStroke,
+    Color.White.copy(0.20f), DarkPal.headerTint, DarkPal.rim,
+    Color.White, Color.White
+) else Pal(
+    false, Color(0xFFF5F5F5), Color(0xFFE6E6E6), Color(0x26000000), Color(0x18000000),
+    Color(0xFF111111), Color(0xFF111111).copy(0.6f),
+    Brush.linearGradient(listOf(Color.White.copy(0.80f), Color.White.copy(0.42f))),
+    Brush.linearGradient(listOf(Color.White.copy(0.95f), Color(0xFF8C8C8C).copy(0.30f), Color.White.copy(0.75f))),
+    Color(0xFF000000).copy(0.12f),
+    LightPal.headerTint,
+    Brush.horizontalGradient(listOf(Color(0xFF8C8C8C).copy(0.55f), Color(0xFF8C8C8C).copy(0.15f), Color(0xFF8C8C8C).copy(0.45f))),
+    Color(0xFF222222), Color(0xFF222222)
+)
+
+// مخطط Material للثيم الأحادي: كل الألوان رمادية (حتى الأزرار والمفاتيح والقوائم ما يطلع فيها لون)
+fun monoScheme(dark: Boolean): ColorScheme = if (dark) darkColorScheme(
+    primary = Color(0xFFEDEDED), onPrimary = Color(0xFF111111),
+    primaryContainer = Color(0xFF2A2A2A), onPrimaryContainer = Color(0xFFEDEDED),
+    secondary = Color(0xFFBDBDBD), onSecondary = Color(0xFF111111),
+    secondaryContainer = Color(0xFF2E2E2E), onSecondaryContainer = Color(0xFFEDEDED),
+    tertiary = Color(0xFF9E9E9E), onTertiary = Color(0xFF111111),
+    tertiaryContainer = Color(0xFF333333), onTertiaryContainer = Color(0xFFEDEDED),
+    surface = Color(0xFF111111), onSurface = Color(0xFFEDEDED),
+    surfaceVariant = Color(0xFF2A2A2A), onSurfaceVariant = Color(0xFFBDBDBD),
+    surfaceTint = Color(0xFFEDEDED),
+    surfaceContainer = Color(0xFF181818), surfaceContainerHigh = Color(0xFF1F1F1F),
+    background = Color(0xFF000000), onBackground = Color(0xFFEDEDED),
+    outline = Color(0xFF8A8A8A), outlineVariant = Color(0xFF444444)
+) else lightColorScheme(
+    primary = Color(0xFF1A1A1A), onPrimary = Color.White,
+    primaryContainer = Color(0xFFDEDEDE), onPrimaryContainer = Color(0xFF111111),
+    secondary = Color(0xFF555555), onSecondary = Color.White,
+    secondaryContainer = Color(0xFFE0E0E0), onSecondaryContainer = Color(0xFF111111),
+    tertiary = Color(0xFF777777), onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFE6E6E6), onTertiaryContainer = Color(0xFF111111),
+    surface = Color(0xFFF5F5F5), onSurface = Color(0xFF111111),
+    surfaceVariant = Color(0xFFE0E0E0), onSurfaceVariant = Color(0xFF555555),
+    surfaceTint = Color(0xFF1A1A1A),
+    surfaceContainer = Color(0xFFECECEC), surfaceContainerHigh = Color(0xFFE6E6E6),
+    background = Color(0xFFF2F2F2), onBackground = Color(0xFF111111),
+    outline = Color(0xFF777777), outlineVariant = Color(0xFFCCCCCC)
+)
+
 // صف خيار في الإعدادات
 @Composable
-fun SettingChoice(t: String, sel: Boolean, enabled: Boolean, modifier: Modifier, onClick: () -> Unit) {
+fun SettingChoice(t: String, sel: Boolean, enabled: Boolean, modifier: Modifier, fontSize: androidx.compose.ui.unit.TextUnit = 14.sp, onClick: () -> Unit) {
     val pal = LocalPal.current
     val shape = RoundedCornerShape(16.dp)
     Box(
@@ -364,7 +411,7 @@ fun SettingChoice(t: String, sel: Boolean, enabled: Boolean, modifier: Modifier,
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Text(t, color = pal.text.copy(alpha = if (enabled) 1f else 0.4f), fontSize = 14.sp,
+        Text(t, color = pal.text.copy(alpha = if (enabled) 1f else 0.4f), fontSize = fontSize,
             fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal, textAlign = TextAlign.Center)
     }
 }
@@ -396,7 +443,7 @@ fun HapticsSetting(all: Boolean, list: Boolean, video: Boolean, scroll: Boolean,
                     Text(if (all) "مفعّلة" else "متوقفة", color = pal.textDim, fontSize = 12.sp)
                 }
                 Icon(IChev, contentDescription = null, tint = pal.textDim,
-                    modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = rot })
+                    modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = 180f - rot })   // RTL: مسكّر = يشاور لليسار، مفتوح = لتحت
             }
             Box(Modifier.width(1.dp).height(34.dp).background(pal.glassStroke))
             Box(Modifier.padding(horizontal = 16.dp)) { Switch(checked = all, onCheckedChange = onAll) }
@@ -467,29 +514,37 @@ fun SettingsBody(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) ->
                 Text("الإعدادات", color = pal.text, fontSize = 24.sp, fontFamily = TitleFont,
                     fontWeight = FontWeight.Medium, letterSpacing = 1.5.sp)
             }
-            Spacer(Modifier.height(28.dp))
-            Text("وضع الألوان", color = pal.textDim, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("حسب النظام", "فاتح", "داكن").forEachIndexed { i, t ->
-                    SettingChoice(t, mode == i, true, Modifier.weight(1f)) { if (mode != i) { buzz(view, false); onMode(i) } }
+            // الصفحة عربية: كل شي تحت الهيدر يترتب من اليمين لليسار (الكتابة على اليمين، والمفاتيح والأسهم على اليسار)
+            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides LayoutDirection.Rtl) {
+                Column(Modifier.fillMaxWidth()) {
+                    Spacer(Modifier.height(28.dp))
+                    Text("وضع الألوان", color = pal.textDim, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("حسب النظام", "فاتح", "داكن").forEachIndexed { i, t ->
+                            SettingChoice(t, mode == i, true, Modifier.weight(1f)) { if (mode != i) { buzz(view, false); onMode(i) } }
+                        }
+                    }
+                    Spacer(Modifier.height(28.dp))
+                    Text("الثيم", color = pal.textDim, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SettingChoice("هوية التطبيق", style == 0, true, Modifier.weight(1f), 13.sp) { if (style != 0) { buzz(view, false); onStyle(0) } }
+                        SettingChoice("Material You ✨", style == 1, myOk, Modifier.weight(1f), 13.sp) { if (style != 1) { buzz(view, false); onStyle(1) } }
+                        SettingChoice("أحادي اللون", style == 2, true, Modifier.weight(1f), 13.sp) { if (style != 2) { buzz(view, false); onStyle(2) } }
+                    }
+                    if (!myOk) Text("Material You يحتاج أندرويد 12 أو أحدث", color = pal.textDim, fontSize = 12.sp,
+                        modifier = Modifier.padding(start = 4.dp, top = 10.dp))
+                    else if (style == 2) Text("درجات الأبيض والأسود والرمادي فقط، بدون أي لون", color = pal.textDim, fontSize = 12.sp,
+                        modifier = Modifier.padding(start = 4.dp, top = 10.dp))
+                    else Text("ألوان الواجهة تتبع خلفية الجوال", color = pal.textDim, fontSize = 12.sp,
+                        modifier = Modifier.padding(start = 4.dp, top = 10.dp))
+                    Spacer(Modifier.height(28.dp))
+                    HapticsSetting(hapAll, hapList, hapVideo, hapScroll, onHapAll, onHapList, onHapVideo, onHapScroll, hapOpen, onHapOpen)
+                    Spacer(Modifier.height(28.dp))
+                    SettingAction("إضافة رابط M3U", onAddLink)
+                    Spacer(Modifier.height(10.dp))
+                    SettingAction("سحب السجل (Logs)", onLogs)
                 }
             }
-            Spacer(Modifier.height(28.dp))
-            Text("الثيم", color = pal.textDim, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SettingChoice("هوية التطبيق", style == 0, true, Modifier.weight(1f)) { if (style != 0) { buzz(view, false); onStyle(0) } }
-                SettingChoice("Material You ✨", style == 1, myOk, Modifier.weight(1f)) { if (style != 1) { buzz(view, false); onStyle(1) } }
-            }
-            if (!myOk) Text("Material You يحتاج أندرويد 12 أو أحدث", color = pal.textDim, fontSize = 12.sp,
-                modifier = Modifier.padding(start = 4.dp, top = 10.dp))
-            else Text("ألوان الواجهة تتبع خلفية الجوال", color = pal.textDim, fontSize = 12.sp,
-                modifier = Modifier.padding(start = 4.dp, top = 10.dp))
-            Spacer(Modifier.height(28.dp))
-            HapticsSetting(hapAll, hapList, hapVideo, hapScroll, onHapAll, onHapList, onHapVideo, onHapScroll, hapOpen, onHapOpen)
-            Spacer(Modifier.height(28.dp))
-            SettingAction("إضافة رابط M3U", onAddLink)
-            Spacer(Modifier.height(10.dp))
-            SettingAction("سحب السجل (Logs)", onLogs)
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -569,32 +624,37 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
                             )
                         }
                     } else {
-                        // تبديل الثيم: موجة ضوء مائلة تكنس الشاشة من جهة الزر اللي ضغطته، وخلفها يظهر الثيم الجديد، مع وهج بلون الثيم الجديد على حافتها
-                        val feather = 280.dp.toPx()
-                        val sgn = if (origin.x < w / 2f) 1f else -1f
-                        val ang = 0.32f
-                        val ux = sgn * kotlin.math.cos(ang); val uy = kotlin.math.sin(ang)
-                        val half = kotlin.math.abs(ux) * w / 2f + kotlin.math.abs(uy) * h / 2f
-                        val t = -half + (2f * half + feather) * prog
-                        val c = Offset(w / 2f, h / 2f)
-                        val d = Offset(ux, uy)
-                        drawRect(
-                            Brush.linearGradient(
-                                0f to Color.Black, 1f to Color.Transparent,
-                                start = c + d * (t - feather), end = c + d * t
-                            ),
-                            blendMode = androidx.compose.ui.graphics.BlendMode.DstOut
-                        )
-                        val glowA = kotlin.math.sin(Math.PI.toFloat() * prog.coerceIn(0f, 1f))
-                        if (glowA > 0.01f) {
-                            val mid = t - feather * 0.5f
-                            val hw = feather * 0.38f
+                        // تبديل الثيم: موجة تنسدل من أعلى الشاشة لأسفلها، وخلفها يظهر الثيم الجديد.
+                        // حافتها متموجة شوي (أعمدة رفيعة كل واحد له إزاحة)، وعليها وهج بلون الثيم الجديد
+                        val feather = 240.dp.toPx()
+                        val pr = prog.coerceIn(0f, 1f)
+                        val t = (h + feather) * pr
+                        val amp = 26.dp.toPx() * kotlin.math.sin(Math.PI.toFloat() * pr)   // التموج يختفي بالبداية والنهاية
+                        val glowA = kotlin.math.sin(Math.PI.toFloat() * pr)
+                        val hw = feather * 0.38f
+                        val n = 40
+                        for (i in 0 until n) {
+                            val x0 = kotlin.math.floor(w * i / n)
+                            val x1 = if (i == n - 1) w else kotlin.math.floor(w * (i + 1) / n)
+                            val off = amp * kotlin.math.sin(i * 0.55f + pr * 7f)
                             drawRect(
-                                Brush.linearGradient(
-                                    0f to Color.Transparent, 0.5f to pal.dot.copy(alpha = 0.38f * glowA), 1f to Color.Transparent,
-                                    start = c + d * (mid - hw), end = c + d * (mid + hw)
-                                )
+                                Brush.verticalGradient(
+                                    0f to Color.Black, 1f to Color.Transparent,
+                                    startY = t - feather + off, endY = t + off
+                                ),
+                                topLeft = Offset(x0, 0f), size = Size(x1 - x0, h),
+                                blendMode = androidx.compose.ui.graphics.BlendMode.DstOut
                             )
+                            if (glowA > 0.01f) {
+                                val mid = t - feather * 0.5f + off
+                                drawRect(
+                                    Brush.verticalGradient(
+                                        0f to Color.Transparent, 0.5f to pal.dot.copy(alpha = 0.38f * glowA), 1f to Color.Transparent,
+                                        startY = mid - hw, endY = mid + hw
+                                    ),
+                                    topLeft = Offset(x0, 0f), size = Size(x1 - x0, h)
+                                )
+                            }
                         }
                     }
                 }
