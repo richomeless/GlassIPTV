@@ -1453,10 +1453,74 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
     }
 
     DisposableEffect(player) {
+        // إعادة التشغيل التلقائي: لو القناة وقفت (خطأ، أو انتهى البث، أو علق على التحميل) نعيد الاتصال لحاله
+        var fails = 0              // عدد المحاولات المتتالية الفاشلة
+        var playSince = 0L         // متى بدأ التشغيل الحالي
+        var playedFor = 0L         // كم مدة اشتغل قبل ما يوقف
+        var retryJob: Job? = null
+        var stallJob: Job? = null
+        // يرجع true لو جدولنا إعادة محاولة، و false لو وصلنا الحد أو ما في قناة مفتوحة
+        fun reconnect(): Boolean {
+            val p = player ?: return false
+            val url = p.currentMediaItem?.localConfiguration?.uri?.toString() ?: return false
+            if (cur == null) return false
+            val now = System.currentTimeMillis()
+            val dur = if (playSince > 0L) now - playSince else playedFor
+            // لو كان شغال أكثر من 15 ثانية قبل ما يوقف، نعتبرها مشكلة جديدة ونبدأ العد من الصفر
+            if (dur > 15_000L) fails = 0
+            playSince = 0L; playedFor = 0L
+            if (fails >= 8) return false
+            val wait = minOf(1000L shl fails, 10_000L)   // 1، 2، 4، 8، ثم 10 ثواني
+            fails++
+            retryJob?.cancel()
+            retryJob = scope.launch {
+                delay(wait)
+                val q = player ?: return@launch
+                // لو سكّرت القناة أو غيّرتها أثناء الانتظار ما نرجّعها
+                if (cur == null || q.currentMediaItem?.localConfiguration?.uri?.toString() != url) return@launch
+                trace("auto reconnect #$fails after ${wait}ms")
+                q.seekToDefaultPosition(); q.prepare(); q.play()
+            }
+            return true
+        }
         val l = object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying; if (isPlaying) error = null }
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                playing = isPlaying
+                if (isPlaying) {
+                    error = null
+                    retryJob?.cancel()
+                    if (playSince == 0L) playSince = System.currentTimeMillis()
+                } else if (playSince > 0L) {
+                    playedFor = System.currentTimeMillis() - playSince
+                    playSince = 0L
+                }
+            }
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                // قناة جديدة: نبدأ من الصفر ونلغي أي محاولة معلّقة للقناة السابقة
+                retryJob?.cancel(); stallJob?.cancel()
+                fails = 0; playSince = 0L; playedFor = 0L
+            }
+            override fun onPlaybackStateChanged(state: Int) {
+                stallJob?.cancel()
+                if (state == Player.STATE_ENDED) {
+                    // البث المباشر ما لازم ينتهي: لو انتهى معناه انقطع
+                    trace("playback ended -> reconnect")
+                    if (reconnect()) error = "انقطع البث، جاري إعادة الاتصال..."
+                } else if (state == Player.STATE_BUFFERING) {
+                    // علق على التحميل أكثر من 25 ثانية وهو مفروض يشتغل: نعيد المحاولة
+                    stallJob = scope.launch {
+                        delay(25_000L)
+                        val q = player ?: return@launch
+                        if (q.playbackState == Player.STATE_BUFFERING && q.playWhenReady) {
+                            trace("stalled in buffering -> reconnect")
+                            reconnect()
+                        }
+                    }
+                }
+            }
             override fun onPlayerError(e: PlaybackException) {
                 trace("onPlayerError ${e.errorCodeName}: ${e.message}")
+                if (reconnect()) { error = "انقطع البث، جاري إعادة الاتصال..."; return }
                 val msg = "تعذّر تشغيل القناة (${e.errorCodeName})"
                 error = msg
                 val c = cur
@@ -1474,7 +1538,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
             }
         }
         player?.addListener(l)
-        onDispose { player?.removeListener(l) }
+        onDispose { retryJob?.cancel(); stallJob?.cancel(); player?.removeListener(l) }
     }
 
     LaunchedEffect(mainTab, lists) {
