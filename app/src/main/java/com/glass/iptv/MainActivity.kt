@@ -371,10 +371,11 @@ fun SettingChoice(t: String, sel: Boolean, enabled: Boolean, modifier: Modifier,
 
 // صف مفتاح فرعي داخل إعدادات الاهتزازات
 @Composable
-fun HapSubRow(t: String, on: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+fun HapSubRow(t: String, on: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     val pal = LocalPal.current
-    Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(t, color = pal.text.copy(alpha = if (enabled) 1f else 0.4f), fontSize = 14.sp, modifier = Modifier.weight(1f))
+    val dim by animateFloatAsState(if (enabled) 1f else 0.4f, tween(220), label = "hapDim")
+    Row(modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(t, color = pal.text.copy(alpha = dim), fontSize = 14.sp, modifier = Modifier.weight(1f))
         Switch(checked = on, onCheckedChange = onChange, enabled = enabled)
     }
 }
@@ -385,7 +386,7 @@ fun HapticsSetting(all: Boolean, list: Boolean, video: Boolean, scroll: Boolean,
                    onAll: (Boolean) -> Unit, onList: (Boolean) -> Unit, onVideo: (Boolean) -> Unit, onScroll: (Boolean) -> Unit,
                    open: Boolean, onOpen: (Boolean) -> Unit) {
     val pal = LocalPal.current
-    val rot by animateFloatAsState(if (open) 90f else 0f, label = "hapRot")
+    val rot by animateFloatAsState(if (open) 90f else 0f, spring(dampingRatio = 0.55f, stiffness = 320f), label = "hapRot")
     Column(Modifier.fillMaxWidth().glass(20.dp)) {
         Row(Modifier.fillMaxWidth().height(68.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f).fillMaxHeight().clickable { onOpen(!open) }.padding(horizontal = 18.dp),
@@ -400,10 +401,28 @@ fun HapticsSetting(all: Boolean, list: Boolean, video: Boolean, scroll: Boolean,
             Box(Modifier.width(1.dp).height(34.dp).background(pal.glassStroke))
             Box(Modifier.padding(horizontal = 16.dp)) { Switch(checked = all, onCheckedChange = onAll) }
         }
-        if (open) Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 16.dp, bottom = 6.dp)) {
-            HapSubRow("اهتزازات مشغل الفيديو", video, all, onVideo)
-            HapSubRow("اهتزازات تصفح قائمة التشغيل", scroll, all, onScroll)
-            HapSubRow("اهتزازات التنقل بين قوائم التشغيل", list, all, onList)
+        // الفتح: البطاقة تنمو بنعومة وتدفع اللي تحتها، والمفاتيح تنزل واحد ورا الثاني (تأخير 70ms بينها) مع تلاشي وانزلاق خفيف.
+        // الإغلاق: تتلاشى وتنكمش بسرعة أكبر.
+        androidx.compose.animation.AnimatedVisibility(
+            visible = open,
+            enter = androidx.compose.animation.expandVertically(tween(420, easing = FastOutSlowInEasing)) +
+                androidx.compose.animation.fadeIn(tween(260)),
+            exit = androidx.compose.animation.shrinkVertically(tween(300, easing = FastOutSlowInEasing)) +
+                androidx.compose.animation.fadeOut(tween(160))
+        ) {
+            Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 16.dp, bottom = 6.dp)) {
+                listOf(
+                    Triple("اهتزازات مشغل الفيديو", video, onVideo),
+                    Triple("اهتزازات تصفح قائمة التشغيل", scroll, onScroll),
+                    Triple("اهتزازات التنقل بين قوائم التشغيل", list, onList)
+                ).forEachIndexed { i, (t, v, cb) ->
+                    HapSubRow(t, v, all, cb, Modifier.animateEnterExit(
+                        enter = androidx.compose.animation.fadeIn(tween(300, delayMillis = 70 * i)) +
+                            androidx.compose.animation.slideInVertically(tween(380, delayMillis = 70 * i, easing = FastOutSlowInEasing)) { -it / 2 },
+                        exit = androidx.compose.animation.fadeOut(tween(120))
+                    ))
+                }
+            }
         }
     }
 }
