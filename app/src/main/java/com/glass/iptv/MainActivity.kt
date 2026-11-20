@@ -59,7 +59,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.foundation.ScrollState
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
@@ -382,13 +382,13 @@ fun HapSubRow(t: String, on: Boolean, enabled: Boolean, onChange: (Boolean) -> U
 // الاهتزازات: مفتاح عام للكل، ولما تفتح السهم يظهر مفتاحين: الواجهة الرئيسية (البلاي ليست) ومشغل الفيديو
 @Composable
 fun HapticsSetting(all: Boolean, list: Boolean, video: Boolean, scroll: Boolean,
-                   onAll: (Boolean) -> Unit, onList: (Boolean) -> Unit, onVideo: (Boolean) -> Unit, onScroll: (Boolean) -> Unit) {
+                   onAll: (Boolean) -> Unit, onList: (Boolean) -> Unit, onVideo: (Boolean) -> Unit, onScroll: (Boolean) -> Unit,
+                   open: Boolean, onOpen: (Boolean) -> Unit) {
     val pal = LocalPal.current
-    var open by remember { mutableStateOf(false) }
     val rot by animateFloatAsState(if (open) 90f else 0f, label = "hapRot")
     Column(Modifier.fillMaxWidth().glass(20.dp)) {
         Row(Modifier.fillMaxWidth().height(68.dp), verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f).fillMaxHeight().clickable { open = !open }.padding(horizontal = 18.dp),
+            Row(Modifier.weight(1f).fillMaxHeight().clickable { onOpen(!open) }.padding(horizontal = 18.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("الاهتزازات", color = pal.text, fontSize = 16.sp)
@@ -418,170 +418,124 @@ fun SettingAction(t: String, onClick: () -> Unit) {
     }
 }
 
-// لقطة للنافذة (الإعدادات) قبل تبديل الوضع، نستخدمها لتأثير الدائرة الكاشفة
-fun snapshotWindow(win: android.view.Window?, done: (android.graphics.Bitmap?) -> Unit) {
-    if (win == null || Build.VERSION.SDK_INT < 26) { done(null); return }
-    try {
-        val dec = win.decorView
-        if (dec.width <= 0 || dec.height <= 0) { done(null); return }
-        val bmp = android.graphics.Bitmap.createBitmap(dec.width, dec.height, android.graphics.Bitmap.Config.ARGB_8888)
-        android.view.PixelCopy.request(win, bmp, { r ->
-            done(if (r == android.view.PixelCopy.SUCCESS) bmp else null)
-        }, android.os.Handler(android.os.Looper.getMainLooper()))
-    } catch (_: Throwable) { done(null) }
+// لقطة حالة الوضع القديم لتأثير الدائرة الكاشفة
+class RevealSnap(val pal: Pal, val scheme: ColorScheme, val mode: Int, val style: Int)
+
+// جسم صفحة الإعدادات (الخلفية + المحتوى). يُرسم مرتين أثناء تبديل الوضع بنفس الكود تماماً:
+// الجديد تحت، والقديم فوقه يُمسح بدائرة حوافها مموهة. لأنهم نفس التصميم بالضبط ما في أي إزاحة بينهم.
+@Composable
+fun SettingsBody(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) -> Unit,
+                 hapAll: Boolean, hapList: Boolean, hapVideo: Boolean, hapScroll: Boolean,
+                 onHapAll: (Boolean) -> Unit, onHapList: (Boolean) -> Unit, onHapVideo: (Boolean) -> Unit, onHapScroll: (Boolean) -> Unit,
+                 hapOpen: Boolean, onHapOpen: (Boolean) -> Unit,
+                 onAddLink: () -> Unit, onLogs: () -> Unit, onClose: () -> Unit,
+                 scroll: ScrollState, view: View) {
+    val pal = LocalPal.current
+    val myOk = Build.VERSION.SDK_INT >= 31
+    Box(
+        Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(pal.bg1, pal.bg2)))
+            .drawBehind {
+                drawRect(Brush.radialGradient(listOf(pal.blob1, Color.Transparent), Offset(size.width * 0.1f, size.height * 0.05f), size.width * 0.9f))
+                drawRect(Brush.radialGradient(listOf(pal.blob2, Color.Transparent), Offset(size.width * 0.95f, size.height * 0.95f), size.width * 0.9f))
+            }
+    ) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().padding(16.dp).verticalScroll(scroll)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(40.dp).glass(14.dp).clickable(onClick = onClose), contentAlignment = Alignment.Center) {
+                    Icon(IBack, contentDescription = null, tint = pal.text, modifier = Modifier.size(22.dp))
+                }
+                Spacer(Modifier.width(12.dp))
+                Text("الإعدادات", color = pal.text, fontSize = 24.sp, fontFamily = TitleFont,
+                    fontWeight = FontWeight.Medium, letterSpacing = 1.5.sp)
+            }
+            Spacer(Modifier.height(28.dp))
+            Text("وضع الألوان", color = pal.textDim, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("حسب النظام", "فاتح", "داكن").forEachIndexed { i, t ->
+                    SettingChoice(t, mode == i, true, Modifier.weight(1f)) { if (mode != i) { buzz(view, false); onMode(i) } }
+                }
+            }
+            Spacer(Modifier.height(28.dp))
+            Text("الثيم", color = pal.textDim, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SettingChoice("هوية التطبيق", style == 0, true, Modifier.weight(1f)) { if (style != 0) { buzz(view, false); onStyle(0) } }
+                SettingChoice("Material You ✨", style == 1, myOk, Modifier.weight(1f)) { if (style != 1) { buzz(view, false); onStyle(1) } }
+            }
+            if (!myOk) Text("Material You يحتاج أندرويد 12 أو أحدث", color = pal.textDim, fontSize = 12.sp,
+                modifier = Modifier.padding(start = 4.dp, top = 10.dp))
+            else Text("ألوان الواجهة تتبع خلفية الجوال", color = pal.textDim, fontSize = 12.sp,
+                modifier = Modifier.padding(start = 4.dp, top = 10.dp))
+            Spacer(Modifier.height(28.dp))
+            HapticsSetting(hapAll, hapList, hapVideo, hapScroll, onHapAll, onHapList, onHapVideo, onHapScroll, hapOpen, onHapOpen)
+            Spacer(Modifier.height(28.dp))
+            SettingAction("إضافة رابط M3U", onAddLink)
+            Spacer(Modifier.height(10.dp))
+            SettingAction("سحب السجل (Logs)", onLogs)
+            Spacer(Modifier.height(24.dp))
+        }
+    }
 }
 
-// صفحة الإعدادات: وضع الألوان + الثيم + الاهتزازات + إضافة رابط + السجل
+// صفحة الإعدادات: طبقة فوق التطبيق داخل نفس النافذة (مو نافذة منفصلة)، فشريط الإشعارات وأيقونات الواي فاي
+// تتبع نفس إعدادات التطبيق الرئيسي، والخلفية تمتد تحت الشريط بلون واحد.
 @Composable
 fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) -> Unit,
                    hapAll: Boolean, hapList: Boolean, hapVideo: Boolean, hapScroll: Boolean,
                    onHapAll: (Boolean) -> Unit, onHapList: (Boolean) -> Unit, onHapVideo: (Boolean) -> Unit, onHapScroll: (Boolean) -> Unit,
                    onAddLink: () -> Unit, onLogs: () -> Unit, onClose: () -> Unit) {
     val pal = LocalPal.current
+    val scheme = MaterialTheme.colorScheme
     val view = androidx.compose.ui.platform.LocalView.current
-    val myOk = Build.VERSION.SDK_INT >= 31
-    androidx.compose.ui.window.Dialog(
-        onDismissRequest = onClose,
-        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        val dv = androidx.compose.ui.platform.LocalView.current
-        val win = ((dv as? androidx.compose.ui.window.DialogWindowProvider)
-            ?: (dv.parent as? androidx.compose.ui.window.DialogWindowProvider))?.window
-        // نافذة الإعدادات تمتد تحت شريط الإشعارات بدون تعتيم. الإعداد مرة وحدة فقط (إعادته مع كل ضغطة كان يسبب رجة في النصوص)
-        LaunchedEffect(win) {
-            win?.let { w ->
-                try {
-                    w.setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
-                    w.setDimAmount(0f)
-                    w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS or
-                        android.view.WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION)
-                    w.addFlags(android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
-                    androidx.core.view.WindowCompat.setDecorFitsSystemWindows(w, false)
-                    w.statusBarColor = android.graphics.Color.TRANSPARENT
-                    w.navigationBarColor = android.graphics.Color.TRANSPARENT
-                    if (Build.VERSION.SDK_INT >= 29) {
-                        w.isStatusBarContrastEnforced = false
-                        w.isNavigationBarContrastEnforced = false
-                    }
-                } catch (_: Throwable) {}
-            }
-        }
-        // لون أيقونات الشريط (واي فاي، بطارية، الساعة): غامقة في الفاتح وفاتحة في الداكن، على نافذة الإعدادات والتطبيق تحتها
-        LaunchedEffect(win, pal.dark) {
+    val scroll = rememberScrollState()
+    var hapOpen by remember { mutableStateOf(false) }
+    var snap by remember { mutableStateOf<RevealSnap?>(null) }
+    var revealId by remember { mutableIntStateOf(0) }
+    var prog by remember { mutableFloatStateOf(0f) }
+    var origin by remember { mutableStateOf(Offset.Zero) }
+    var lastDown by remember { mutableStateOf(Offset.Zero) }
+    val fade = remember { Animatable(0f) }
+    BackHandler(onBack = onClose)
+    LaunchedEffect(Unit) { fade.animateTo(1f, tween(160)) }
+    LaunchedEffect(revealId) {
+        if (revealId > 0) {
+            // ننتظر فريمين عشان إعادة رسم الثيم الجديد (التقيلة) تخلص قبل ما تبدأ الحركة
             androidx.compose.runtime.withFrameNanos { }
-            val light = !pal.dark
-            fun setBars(w: android.view.Window?) {
-                if (w == null) return
-                try {
-                    val ic = androidx.core.view.WindowCompat.getInsetsController(w, w.decorView)
-                    ic.isAppearanceLightStatusBars = light
-                    ic.isAppearanceLightNavigationBars = light
-                    // احتياط للأجهزة اللي ما تلتزم بالطريقة الحديثة
-                    @Suppress("DEPRECATION")
-                    run {
-                        val dec = w.decorView
-                        var f = dec.systemUiVisibility
-                        f = if (light) f or android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR else f and android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
-                        if (Build.VERSION.SDK_INT >= 26) {
-                            f = if (light) f or android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR else f and android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
-                        }
-                        dec.systemUiVisibility = f
-                    }
-                } catch (_: Throwable) {}
-            }
-            setBars(win)
-            setBars((view.context as? android.app.Activity)?.window)
+            androidx.compose.runtime.withFrameNanos { }
+            androidx.compose.animation.core.animate(0f, 1f,
+                animationSpec = tween(850, easing = androidx.compose.animation.core.CubicBezierEasing(0.22f, 0f, 0.1f, 1f))) { v, _ -> prog = v }
+            snap = null
         }
-        val rootPos = remember { floatArrayOf(0f, 0f) }
-        var snap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
-        var prog by remember { mutableFloatStateOf(0f) }
-        var origin by remember { mutableStateOf(Offset.Zero) }
-        var lastDown by remember { mutableStateOf(Offset.Zero) }
-        LaunchedEffect(snap) {
-            if (snap != null) {
-                // ننتظر فريمين عشان إعادة رسم الثيم الجديد (التقيلة) تخلص قبل ما تبدأ الحركة، وما تبلع أول الفريمات
-                androidx.compose.runtime.withFrameNanos { }
-                androidx.compose.runtime.withFrameNanos { }
-                androidx.compose.animation.core.animate(0f, 1f,
-                    animationSpec = tween(850, easing = androidx.compose.animation.core.CubicBezierEasing(0.22f, 0f, 0.1f, 1f))) { v, _ -> prog = v }
-                snap = null
+    }
+    // نحفظ حالة الوضع القديم، نبدّل الوضع، ونكشف الجديد بدائرة تنتشر من مكان الإصبع
+    fun revealThen(apply: () -> Unit) {
+        prog = 0f; origin = lastDown
+        snap = RevealSnap(pal, scheme, mode, style)
+        revealId++
+        apply()
+    }
+    Box(
+        Modifier.fillMaxSize().graphicsLayer { alpha = fade.value }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val d = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    lastDown = d.position
+                }
             }
-        }
-        // نلتقط الشاشة بالوضع القديم، نبدّل الوضع، ونكشف الجديد بدائرة تنتشر من مكان الإصبع
-        fun revealThen(apply: () -> Unit) {
-            val from = lastDown
-            snapshotWindow(win) { bmp ->
-                if (bmp != null) { prog = 0f; origin = from; snap = bmp.asImageBitmap() }
-                apply()
-            }
-        }
-        Box(
+    ) {
+        SettingsBody(mode, style, { m -> revealThen { onMode(m) } }, onStyle,
+            hapAll, hapList, hapVideo, hapScroll, onHapAll, onHapList, onHapVideo, onHapScroll,
+            hapOpen, { hapOpen = it }, onAddLink, onLogs, onClose, scroll, view)
+        val sn = snap
+        if (sn != null) Box(
             Modifier.fillMaxSize()
-                .onGloballyPositioned { val p = it.positionInWindow(); rootPos[0] = p.x; rootPos[1] = p.y }
-                .pointerInput(Unit) {
-                    awaitEachGesture {
-                        val d = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                        lastDown = d.position
-                    }
-                }
-                .background(Brush.verticalGradient(listOf(pal.bg1, pal.bg2)))
-                .drawBehind {
-                    drawRect(Brush.radialGradient(listOf(pal.blob1, Color.Transparent), Offset(size.width * 0.1f, size.height * 0.05f), size.width * 0.9f))
-                    drawRect(Brush.radialGradient(listOf(pal.blob2, Color.Transparent), Offset(size.width * 0.95f, size.height * 0.95f), size.width * 0.9f))
-                }
-        ) {
-            Column(Modifier.fillMaxSize().statusBarsPadding().padding(16.dp).verticalScroll(rememberScrollState())) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(40.dp).glass(14.dp).clickable(onClick = onClose), contentAlignment = Alignment.Center) {
-                        Icon(IBack, contentDescription = null, tint = pal.text, modifier = Modifier.size(22.dp))
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Text("الإعدادات", color = pal.text, fontSize = 24.sp, fontFamily = TitleFont,
-                        fontWeight = FontWeight.Medium, letterSpacing = 1.5.sp)
-                }
-                Spacer(Modifier.height(28.dp))
-                Text("وضع الألوان", color = pal.textDim, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("حسب النظام", "فاتح", "داكن").forEachIndexed { i, t ->
-                        SettingChoice(t, mode == i, true, Modifier.weight(1f)) { if (mode != i) { buzz(view, false); revealThen { onMode(i) } } }
-                    }
-                }
-                Spacer(Modifier.height(28.dp))
-                Text("الثيم", color = pal.textDim, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SettingChoice("هوية التطبيق", style == 0, true, Modifier.weight(1f)) { if (style != 0) { buzz(view, false); onStyle(0) } }
-                    SettingChoice("Material You ✨", style == 1, myOk, Modifier.weight(1f)) { if (style != 1) { buzz(view, false); onStyle(1) } }
-                }
-                if (!myOk) Text("Material You يحتاج أندرويد 12 أو أحدث", color = pal.textDim, fontSize = 12.sp,
-                    modifier = Modifier.padding(start = 4.dp, top = 10.dp))
-                else Text("ألوان الواجهة تتبع خلفية الجوال", color = pal.textDim, fontSize = 12.sp,
-                    modifier = Modifier.padding(start = 4.dp, top = 10.dp))
-                Spacer(Modifier.height(28.dp))
-                HapticsSetting(hapAll, hapList, hapVideo, hapScroll, onHapAll, onHapList, onHapVideo, onHapScroll)
-                Spacer(Modifier.height(28.dp))
-                SettingAction("إضافة رابط M3U", onAddLink)
-                Spacer(Modifier.height(10.dp))
-                SettingAction("سحب السجل (Logs)", onLogs)
-                Spacer(Modifier.height(24.dp))
-            }
-            // طبقة الوضع القديم: تغطي الشاشة ويُمسح منها بدائرة حوافها مموهة تكبر من مكان الإصبع فيظهر الوضع الجديد تحتها
-            val sn = snap
-            if (sn != null) Spacer(Modifier.fillMaxSize()
                 .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
-                .drawBehind {
+                .drawWithContent {
+                    drawContent()
                     val w = size.width; val h = size.height
                     val feather = 130.dp.toPx()
                     val dx = maxOf(origin.x, w - origin.x); val dy = maxOf(origin.y, h - origin.y)
                     val maxR = kotlin.math.sqrt(dx * dx + dy * dy)
                     val rad = (maxR + feather) * prog
-                    // الصورة تُرسم بحجمها الأصلي 1:1 من مكان الصندوق داخل النافذة، بدون أي تمطيط (التمطيط كان يسبب نزول النصوص)
-                    val px = rootPos[0].toInt().coerceAtLeast(0); val py = rootPos[1].toInt().coerceAtLeast(0)
-                    val sw = minOf(w.toInt(), sn.width - px); val sh = minOf(h.toInt(), sn.height - py)
-                    if (sw > 0 && sh > 0) drawImage(sn,
-                        srcOffset = androidx.compose.ui.unit.IntOffset(px, py),
-                        srcSize = androidx.compose.ui.unit.IntSize(sw, sh),
-                        dstSize = androidx.compose.ui.unit.IntSize(sw, sh),
-                        filterQuality = androidx.compose.ui.graphics.FilterQuality.None)
                     if (rad > 1f) {
                         val inner = ((rad - feather) / rad).coerceIn(0f, 1f)
                         drawRect(
@@ -592,7 +546,21 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
                             blendMode = androidx.compose.ui.graphics.BlendMode.DstOut
                         )
                     }
-                })
+                }
+                // أثناء الحركة (أقل من ثانية) نتجاهل اللمس عشان ما يتداخل مع النسخة القديمة
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+                    }
+                }
+        ) {
+            MaterialTheme(typography = appTypography(), colorScheme = sn.scheme) {
+                CompositionLocalProvider(LocalPal provides sn.pal) {
+                    SettingsBody(sn.mode, sn.style, {}, {},
+                        hapAll, hapList, hapVideo, hapScroll, {}, {}, {}, {},
+                        hapOpen, {}, {}, {}, {}, scroll, view)
+                }
+            }
         }
     }
 }
