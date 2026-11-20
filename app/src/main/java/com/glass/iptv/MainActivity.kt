@@ -397,9 +397,9 @@ fun HapticsSetting(all: Boolean, list: Boolean, video: Boolean, scroll: Boolean,
             Box(Modifier.padding(horizontal = 16.dp)) { Switch(checked = all, onCheckedChange = onAll) }
         }
         if (open) Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 16.dp, bottom = 6.dp)) {
-            HapSubRow("اهتزازات الواجهة الرئيسية (البلاي ليست)", list, all, onList)
             HapSubRow("اهتزازات مشغل الفيديو", video, all, onVideo)
             HapSubRow("اهتزازات تصفح قائمة التشغيل", scroll, all, onScroll)
+            HapSubRow("اهتزازات التنقل بين قوائم التشغيل", list, all, onList)
         }
     }
 }
@@ -454,7 +454,7 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
                 Text("الثيم", color = pal.textDim, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SettingChoice("هوية التطبيق", style == 0, true, Modifier.weight(1f)) { if (style != 0) { buzz(view, false); onStyle(0) } }
-                    SettingChoice("Material You", style == 1, myOk, Modifier.weight(1f)) { if (style != 1) { buzz(view, false); onStyle(1) } }
+                    SettingChoice("Material You ✨", style == 1, myOk, Modifier.weight(1f)) { if (style != 1) { buzz(view, false); onStyle(1) } }
                 }
                 if (!myOk) Text("Material You يحتاج أندرويد 12 أو أحدث", color = pal.textDim, fontSize = 12.sp,
                     modifier = Modifier.padding(start = 4.dp, top = 10.dp))
@@ -463,7 +463,7 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
                 Spacer(Modifier.height(28.dp))
                 HapticsSetting(hapAll, hapList, hapVideo, hapScroll, onHapAll, onHapList, onHapVideo, onHapScroll)
                 Spacer(Modifier.height(28.dp))
-                SettingAction("إضافة رابط", onAddLink)
+                SettingAction("إضافة رابط M3U", onAddLink)
                 Spacer(Modifier.height(10.dp))
                 SettingAction("سحب السجل (Logs)", onLogs)
                 Spacer(Modifier.height(24.dp))
