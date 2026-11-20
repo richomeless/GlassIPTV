@@ -859,6 +859,13 @@ fun Tile(c: Channel, fav: Boolean, onLong: () -> Unit, onClick: (Rect) -> Unit) 
             else {
                 // نصغّر الشعار وقت فك الضغط عشان التمرير يبقى سلس
                 val req = remember(c.logo) { ImageRequest.Builder(ctx).data(c.logo).size(180).crossfade(false).build() }
+                // ظل ناعم تحت الشعار في الوضع الفاتح فقط (أندرويد 12+) عشان الشعارات البيضاء تبان
+                if (!LocalPal.current.dark && Build.VERSION.SDK_INT >= 31) {
+                    AsyncImage(model = req, contentDescription = null, contentScale = ContentScale.Fit,
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.Black.copy(alpha = 0.4f), androidx.compose.ui.graphics.BlendMode.SrcIn),
+                        modifier = Modifier.fillMaxSize().padding(14.dp).offset(y = 1.5.dp)
+                            .blur(2.5.dp, androidx.compose.ui.draw.BlurredEdgeTreatment.Unbounded))
+                }
                 AsyncImage(model = req, contentDescription = null, contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxSize().padding(14.dp))
             }
