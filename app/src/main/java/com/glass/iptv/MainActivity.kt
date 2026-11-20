@@ -169,6 +169,7 @@ class Store(ctx: Context) {
     fun hapAll(): Boolean = p.getBoolean("hap_all", true)
     fun hapList(): Boolean = p.getBoolean("hap_list", true)
     fun hapVideo(): Boolean = p.getBoolean("hap_video", true)
+    fun hapScroll(): Boolean = p.getBoolean("hap_scroll", true)
     fun setHap(key: String, b: Boolean) = p.edit().putBoolean(key, b).apply()
     fun pipMode(): Boolean = p.getBoolean("pip", true)
     fun setPipMode(b: Boolean) = p.edit().putBoolean("pip", b).apply()
@@ -376,8 +377,8 @@ fun HapSubRow(t: String, on: Boolean, enabled: Boolean, onChange: (Boolean) -> U
 
 // الاهتزازات: مفتاح عام للكل، ولما تفتح السهم يظهر مفتاحين: الواجهة الرئيسية (البلاي ليست) ومشغل الفيديو
 @Composable
-fun HapticsSetting(all: Boolean, list: Boolean, video: Boolean,
-                   onAll: (Boolean) -> Unit, onList: (Boolean) -> Unit, onVideo: (Boolean) -> Unit) {
+fun HapticsSetting(all: Boolean, list: Boolean, video: Boolean, scroll: Boolean,
+                   onAll: (Boolean) -> Unit, onList: (Boolean) -> Unit, onVideo: (Boolean) -> Unit, onScroll: (Boolean) -> Unit) {
     val pal = LocalPal.current
     var open by remember { mutableStateOf(false) }
     val rot by animateFloatAsState(if (open) 90f else 0f, label = "hapRot")
@@ -398,6 +399,7 @@ fun HapticsSetting(all: Boolean, list: Boolean, video: Boolean,
         if (open) Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 16.dp, bottom = 6.dp)) {
             HapSubRow("اهتزازات الواجهة الرئيسية (البلاي ليست)", list, all, onList)
             HapSubRow("اهتزازات مشغل الفيديو", video, all, onVideo)
+            HapSubRow("اهتزازات تصفح قائمة التشغيل", scroll, all, onScroll)
         }
     }
 }
@@ -415,8 +417,8 @@ fun SettingAction(t: String, onClick: () -> Unit) {
 // صفحة الإعدادات: وضع الألوان + الثيم + الاهتزازات + إضافة رابط + السجل
 @Composable
 fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) -> Unit,
-                   hapAll: Boolean, hapList: Boolean, hapVideo: Boolean,
-                   onHapAll: (Boolean) -> Unit, onHapList: (Boolean) -> Unit, onHapVideo: (Boolean) -> Unit,
+                   hapAll: Boolean, hapList: Boolean, hapVideo: Boolean, hapScroll: Boolean,
+                   onHapAll: (Boolean) -> Unit, onHapList: (Boolean) -> Unit, onHapVideo: (Boolean) -> Unit, onHapScroll: (Boolean) -> Unit,
                    onAddLink: () -> Unit, onLogs: () -> Unit, onClose: () -> Unit) {
     val pal = LocalPal.current
     val view = androidx.compose.ui.platform.LocalView.current
@@ -459,7 +461,7 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
                 else Text("ألوان الواجهة تتبع خلفية الجوال", color = pal.textDim, fontSize = 12.sp,
                     modifier = Modifier.padding(start = 4.dp, top = 10.dp))
                 Spacer(Modifier.height(28.dp))
-                HapticsSetting(hapAll, hapList, hapVideo, onHapAll, onHapList, onHapVideo)
+                HapticsSetting(hapAll, hapList, hapVideo, hapScroll, onHapAll, onHapList, onHapVideo, onHapScroll)
                 Spacer(Modifier.height(28.dp))
                 SettingAction("إضافة رابط", onAddLink)
                 Spacer(Modifier.height(10.dp))
@@ -482,13 +484,15 @@ object Hap {
     @Volatile var all = true
     @Volatile var list = true
     @Volatile var video = true
+    @Volatile var scroll = true
     @Volatile var inPlayer = false
     fun allowed(): Boolean = all && (if (inPlayer) video else list)
+    fun scrollAllowed(): Boolean = all && scroll
 }
 
 // نقرة خفيفة وحادة لتأثير برايل أثناء التمرير
 fun scrollTick(v: View) {
-    if (!Hap.allowed()) return
+    if (!Hap.scrollAllowed()) return
     val ok = try {
         val c = when {
             Build.VERSION.SDK_INT >= 34 -> android.view.HapticFeedbackConstants.SEGMENT_FREQUENT_TICK
@@ -522,7 +526,7 @@ fun ScrollTicks(state: LazyGridState, view: View) {
             val hitTop = prevBack && !back
             val hitBottom = prevFwd && !fwd
             prevBack = back; prevFwd = fwd
-            if ((hitTop || hitBottom) && state.isScrollInProgress) buzz(view, false)
+            if ((hitTop || hitBottom) && state.isScrollInProgress) buzz(view, false, scroll = true)
         }
     }
     LaunchedEffect(state) {
@@ -549,8 +553,8 @@ fun ScrollTicks(state: LazyGridState, view: View) {
     }
 }
 
-fun buzz(v: View, release: Boolean) {
-    if (!Hap.allowed()) return
+fun buzz(v: View, release: Boolean, scroll: Boolean = false) {
+    if (!(if (scroll) Hap.scrollAllowed() else Hap.allowed())) return
     val ok = try {
         val c = if (release && Build.VERSION.SDK_INT >= 27) android.view.HapticFeedbackConstants.VIRTUAL_KEY_RELEASE
                 else android.view.HapticFeedbackConstants.VIRTUAL_KEY
@@ -1156,7 +1160,8 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
     var hapAll by remember { mutableStateOf(store.hapAll()) }
     var hapList by remember { mutableStateOf(store.hapList()) }
     var hapVideo by remember { mutableStateOf(store.hapVideo()) }
-    SideEffect { Hap.all = hapAll; Hap.list = hapList; Hap.video = hapVideo; Hap.inPlayer = cur != null }
+    var hapScroll by remember { mutableStateOf(store.hapScroll()) }
+    SideEffect { Hap.all = hapAll; Hap.list = hapList; Hap.video = hapVideo; Hap.scroll = hapScroll; Hap.inPlayer = cur != null }
     var ui by remember { mutableStateOf(true) }
     var zoom by remember { mutableStateOf(1f) }
     var panX by remember { mutableStateOf(0f) }
@@ -2140,24 +2145,31 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
         mode = themeMode, style = themeStyle,
         onMode = { onTheme(it, themeStyle) }, onStyle = { onTheme(themeMode, it) },
         hapAll = hapAll, hapList = hapList, hapVideo = hapVideo,
+        hapScroll = hapScroll,
         onHapAll = { v ->
             hapAll = v; Hap.all = v; store.setHap("hap_all", v)
-            // لو شغّلت العام والفرعيين مطفيين، نرجّعهم يشتغلون
-            if (v && !hapList && !hapVideo) {
-                hapList = true; hapVideo = true; Hap.list = true; Hap.video = true
-                store.setHap("hap_list", true); store.setHap("hap_video", true)
+            // لو شغّلت العام والفرعيين كلهم مطفيين، نرجّعهم يشتغلون
+            if (v && !hapList && !hapVideo && !hapScroll) {
+                hapList = true; hapVideo = true; hapScroll = true
+                Hap.list = true; Hap.video = true; Hap.scroll = true
+                store.setHap("hap_list", true); store.setHap("hap_video", true); store.setHap("hap_scroll", true)
             }
             if (v) buzz(hapticView, false)
         },
         onHapList = { v ->
             hapList = v; Hap.list = v; store.setHap("hap_list", v)
-            // لو انطفى الاثنين الفرعيين ينطفي العام تلقائياً
-            if (!v && !hapVideo) { hapAll = false; Hap.all = false; store.setHap("hap_all", false) }
+            // لو انطفت الثلاثة الفرعية ينطفي العام تلقائياً
+            if (!v && !hapVideo && !hapScroll) { hapAll = false; Hap.all = false; store.setHap("hap_all", false) }
             else if (v) buzz(hapticView, false)
         },
         onHapVideo = { v ->
             hapVideo = v; Hap.video = v; store.setHap("hap_video", v)
-            if (!v && !hapList) { hapAll = false; Hap.all = false; store.setHap("hap_all", false) }
+            if (!v && !hapList && !hapScroll) { hapAll = false; Hap.all = false; store.setHap("hap_all", false) }
+        },
+        onHapScroll = { v ->
+            hapScroll = v; Hap.scroll = v; store.setHap("hap_scroll", v)
+            if (!v && !hapList && !hapVideo) { hapAll = false; Hap.all = false; store.setHap("hap_all", false) }
+            else if (v) scrollTick(hapticView)
         },
         onAddLink = { showSettings = false; showAdd = true },
         onLogs = { pullLogs() },
