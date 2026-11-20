@@ -2133,9 +2133,25 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
         mode = themeMode, style = themeStyle,
         onMode = { onTheme(it, themeStyle) }, onStyle = { onTheme(themeMode, it) },
         hapAll = hapAll, hapList = hapList, hapVideo = hapVideo,
-        onHapAll = { hapAll = it; Hap.all = it; store.setHap("hap_all", it); if (it) buzz(hapticView, false) },
-        onHapList = { hapList = it; Hap.list = it; store.setHap("hap_list", it); if (it) buzz(hapticView, false) },
-        onHapVideo = { hapVideo = it; Hap.video = it; store.setHap("hap_video", it) },
+        onHapAll = { v ->
+            hapAll = v; Hap.all = v; store.setHap("hap_all", v)
+            // لو شغّلت العام والفرعيين مطفيين، نرجّعهم يشتغلون
+            if (v && !hapList && !hapVideo) {
+                hapList = true; hapVideo = true; Hap.list = true; Hap.video = true
+                store.setHap("hap_list", true); store.setHap("hap_video", true)
+            }
+            if (v) buzz(hapticView, false)
+        },
+        onHapList = { v ->
+            hapList = v; Hap.list = v; store.setHap("hap_list", v)
+            // لو انطفى الاثنين الفرعيين ينطفي العام تلقائياً
+            if (!v && !hapVideo) { hapAll = false; Hap.all = false; store.setHap("hap_all", false) }
+            else if (v) buzz(hapticView, false)
+        },
+        onHapVideo = { v ->
+            hapVideo = v; Hap.video = v; store.setHap("hap_video", v)
+            if (!v && !hapList) { hapAll = false; Hap.all = false; store.setHap("hap_all", false) }
+        },
         onAddLink = { showSettings = false; showAdd = true },
         onLogs = { pullLogs() },
         onClose = { showSettings = false }
