@@ -1966,6 +1966,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             var panning = false
                             var released = false
                             var mode = 0            // 0 لا شي، 1 دخول شاشة كاملة، 2 خروج منها
+                            var sideways = false    // دخول الشاشة الكاملة بسحب لليمين أو لليسار (بدل لأعلى)
                             var lastPos = down.position
                             val dist = 280.dp.toPx()
                             // الربع السفلي من الشاشة (منطقة إيماءة الخروج من التطبيق) ما يفعّل الشاشة الكاملة
@@ -1995,6 +1996,9 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                     } else if (zoom <= 1.02f && vert) {
                                         if (!full && ay < 0f && !blockUp) mode = 1
                                         else if (!full && ay > 0f) mode = 3
+                                    } else if (zoom <= 1.02f && !full && !blockUp) {
+                                        // سحب لليمين أو لليسار: تكبير الشاشة (الشاشة الكاملة)
+                                        mode = 1; sideways = true
                                     } else if (!full && ay > 0f && !canPanDown && kotlin.math.abs(ay) > kotlin.math.abs(ax) * 0.7f) {
                                         // سحب للأسفل شبه عمودي، أو الفيديو مقرّب وواصل لحافته العليا: نقبل الرمي
                                         mode = 3
@@ -2006,7 +2010,8 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                     ch.consume()
                                 } else if (mode == 1 || mode == 2) {
                                     // الفيديو يلحق إصبعك بنفس الاتجاه (في الخروج من الشاشة الكاملة: أي اتجاه)
-                                    if (mode == 1) fsDy = tot.y.coerceAtMost(0f)
+                                    if (mode == 1 && sideways) { fsDx = tot.x; fsDy = tot.y.coerceAtMost(0f) }
+                                    else if (mode == 1) fsDy = tot.y.coerceAtMost(0f)
                                     else { fsDx = tot.x; fsDy = tot.y }
                                     fsDrag = 1f
                                     ch.consume()
@@ -2027,7 +2032,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                 if (mode != 0) {
                                     // المسافة المقطوعة من نقطة البداية حسب نوع السحب؛ كل تغيّر في رقم النقطة = هزة وحدة
                                     val travel = when (mode) {
-                                        1 -> (-ay).coerceAtLeast(0f)
+                                        1 -> if (sideways) kotlin.math.abs(tot.x) else (-ay).coerceAtLeast(0f)
                                         3 -> ay.coerceAtLeast(0f)
                                         else -> maxOf(kotlin.math.abs(tot.x), kotlin.math.abs(tot.y))
                                     }
@@ -2039,9 +2044,9 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             if (mode == 1 || mode == 2) {
                                 val v = vt.calculateVelocity()
                                 val dispX = kotlin.math.abs(fsDx); val dispY = kotlin.math.abs(fsDy)
-                                val disp = if (mode == 1) -fsDy else maxOf(dispX, dispY)
-                                val thr = if (mode == 2 && dispX > dispY) size.width * 0.12f else size.height * 0.12f
-                                val vel = if (mode == 1) -v.y else kotlin.math.sqrt(v.x * v.x + v.y * v.y)
+                                val disp = if (mode == 1 && sideways) dispX else if (mode == 1) -fsDy else maxOf(dispX, dispY)
+                                val thr = if ((mode == 2 && dispX > dispY) || (mode == 1 && sideways)) size.width * 0.12f else size.height * 0.12f
+                                val vel = if (mode == 1 && sideways) kotlin.math.abs(v.x) else if (mode == 1) -v.y else kotlin.math.sqrt(v.x * v.x + v.y * v.y)
                                 val go = disp > thr || vel > 900f
                                 val enter = mode == 1
                                 scope.launch {
