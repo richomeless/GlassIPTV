@@ -43,6 +43,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -413,6 +414,57 @@ fun Modifier.glass(r: Dp = 24.dp, clipContent: Boolean = true): Modifier = compo
 }
 
 // هزة خفيفة: نجرب هزة النظام أول، وإذا ما اشتغلت نجرب الاهتزاز المباشر
+// نقرة خفيفة وحادة لتأثير برايل أثناء التمرير
+fun scrollTick(v: View) {
+    val ok = try {
+        val c = when {
+            Build.VERSION.SDK_INT >= 34 -> android.view.HapticFeedbackConstants.SEGMENT_FREQUENT_TICK
+            Build.VERSION.SDK_INT >= 27 -> android.view.HapticFeedbackConstants.TEXT_HANDLE_MOVE
+            else -> android.view.HapticFeedbackConstants.CLOCK_TICK
+        }
+        v.performHapticFeedback(c)
+    } catch (_: Throwable) { false }
+    if (!ok) try {
+        val ctx = v.context
+        val vib: android.os.Vibrator = if (Build.VERSION.SDK_INT >= 31) {
+            ctx.getSystemService(android.os.VibratorManager::class.java).defaultVibrator
+        } else {
+            ctx.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+        }
+        vib.vibrate(android.os.VibrationEffect.createOneShot(6L, 90))
+    } catch (_: Throwable) {}
+}
+
+// تأثير برايل: هزة صغيرة كل مسافة تمرير قصيرة في قائمة القنوات، نزولاً وصعوداً
+@Composable
+fun ScrollTicks(state: LazyGridState, view: View) {
+    val d = androidx.compose.ui.platform.LocalDensity.current
+    val tickPx = with(d) { 36.dp.toPx() }
+    val gapPx = with(d) { 14.dp.toPx() }
+    LaunchedEffect(state) {
+        var last = Float.NaN
+        var lastT = 0L
+        snapshotFlow {
+            val items = state.layoutInfo.visibleItemsInfo
+            val f = items.firstOrNull()
+            if (f == null) Float.NaN else {
+                val cols = items.count { it.offset.y == f.offset.y }.coerceAtLeast(1)
+                (f.index / cols) * (f.size.height + gapPx) - f.offset.y
+            }
+        }.collect { pos ->
+            if (pos.isNaN()) { last = Float.NaN; return@collect }
+            if (last.isNaN() || !state.isScrollInProgress) { last = pos; return@collect }
+            val delta = pos - last
+            val steps = (kotlin.math.abs(delta) / tickPx).toInt()
+            if (steps >= 1) {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - lastT >= 20L) { lastT = now; scrollTick(view) }
+                last = if (steps > 6) pos else last + (if (delta > 0) steps else -steps) * tickPx
+            }
+        }
+    }
+}
+
 fun buzz(v: View, release: Boolean) {
     val ok = try {
         val c = if (release && Build.VERSION.SDK_INT >= 27) android.view.HapticFeedbackConstants.VIRTUAL_KEY_RELEASE
@@ -1068,6 +1120,8 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
     // حالة الشبكة هنا فوق عشان ترجع لنفس المكان بعد الخروج من القناة
     val gridState = rememberLazyGridState()
     val favState = rememberLazyGridState()
+    ScrollTicks(gridState, hapticView)
+    ScrollTicks(favState, hapticView)
     val pager = rememberPagerState(initialPage = 1, pageCount = { 2 })
     var mainTab by remember { mutableStateOf(0) }
     var lastMainTab by remember { mutableStateOf(0) }
@@ -1334,23 +1388,13 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
     var renameText by remember { mutableStateOf("") }
     // لمعة الهيدر: حلقة إطارات تشتغل فقط وأنت في الواجهة الرئيسية
     var shT by remember { mutableStateOf(0f) }
-    // تذبذب نور النجمة: يقوى ويضعف بشكل غير منتظم مثل نجم يتلألأ في الفضاء (0.18 ضعيف .. 1 قوي)
-    var twk by remember { mutableStateOf(1f) }
     LaunchedEffect(cur == null) {
         if (cur == null) {
             val t0 = withFrameNanos { it }
             while (true) {
                 val t = withFrameNanos { it }
-                val ms = (t - t0) / 1_000_000L
-                val ph = ms % 16000L
+                val ph = ((t - t0) / 1_000_000L) % 16000L
                 shT = if (ph < 12000L) ph / 12000f else 1f
-                val sec = ms / 1000.0
-                val tau = 2.0 * Math.PI
-                // ثلاث موجات بترددات غير متناسبة فلا يتكرر النمط بشكل واضح
-                val v = 0.60 + 0.24 * Math.sin(tau * sec / 2.3) +
-                    0.13 * Math.sin(tau * sec / 0.83 + 1.3) +
-                    0.07 * Math.sin(tau * sec / 0.31 + 2.1)
-                twk = v.toFloat().coerceIn(0.18f, 1f)
             }
         }
     }
@@ -1465,7 +1509,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             topLeft = Offset(0f, yb - 1.dp.toPx()), size = Size(size.width, 2.dp.toPx()))
                         // مذنّب صغير وناعم: يظهر تدريجياً من الربع ويتلاشى قبل نهاية الخط، وألوانه تتغير ببطء
                         fun Color.a(x: Float) = copy(alpha = alpha * x * env)
-                        val tl = size.width * 0.26f
+                        val tl = size.width * 0.20f
                         fun taper(tw: Float) = Path().apply {
                             moveTo(hx, yb - tw / 2f)
                             quadraticBezierTo(hx - tl * 0.5f, yb - tw * 0.25f, hx - tl, yb)
@@ -1473,30 +1517,20 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             this.close()   // this عشان ما تنادي دالة close() حقت القناة
                         }
                         if (env > 0.002f) {
-                            // أثر متوهج يبقى على الخط خلف النجمة ويتلاشى تدريجياً
-                            val gx0 = (hx - tl * 1.5f).coerceAtLeast(0f)
-                            drawRect(Brush.horizontalGradient(listOf(Color.Transparent, hc.a(0.10f), hc2.a(0.30f)), startX = gx0, endX = hx),
-                                topLeft = Offset(gx0, yb - 3.dp.toPx()), size = Size(hx - gx0, 6.dp.toPx()))
-                            drawRect(Brush.horizontalGradient(listOf(Color.Transparent, hc2.a(0.35f), pal.shim.a(0.75f)), startX = gx0, endX = hx),
-                                topLeft = Offset(gx0, yb - 1.dp.toPx()), size = Size(hx - gx0, 2.dp.toPx()))
-                            // ذيل نحيف بثلاث طبقات: هالة خفيفة، ثم لون متوهج، ثم قلب أبيض ساطع
-                            drawPath(taper(7.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc.a(0.12f), hc2.a(0.38f)), startX = hx - tl, endX = hx))
-                            drawPath(taper(3.2f.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc2.a(0.5f), hc.a(0.9f)), startX = hx - tl, endX = hx))
-                            drawPath(taper(1.4f.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, pal.shim.a(0.7f), Color.White.copy(alpha = env)), startX = hx - tl * 0.85f, endX = hx))
+                            drawPath(taper(14.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc.a(0.05f), hc2.a(0.14f)), startX = hx - tl, endX = hx))
+                            drawPath(taper(5.dp.toPx()), Brush.horizontalGradient(listOf(Color.Transparent, hc2.a(0.28f), pal.shim.a(0.6f)), startX = hx - tl, endX = hx))
                             for (i in 1..4) {
                                 val f = i / 5f
                                 val sp = Offset(hx - tl * f * 0.8f, yb + kotlin.math.sin(shT * 14f + i * 2.1f) * 4.dp.toPx() * f)
                                 drawCircle(hc2.a((1f - f) * 0.4f), radius = (1.6f - f * 0.9f).dp.toPx(), center = sp)
                             }
                             val c0 = Offset(hx, yb)
-                            // تلألؤ النجمة: الشدة والحجم يتغيران معاً مع twk
-                            val tw = twk
-                            val pulse = (0.8f + 0.35f * tw)
-                            val halo = 16.dp.toPx() * (0.75f + 0.5f * tw)
-                            drawCircle(Brush.radialGradient(listOf(hc.a(0.28f * (0.35f + 0.65f * tw)), Color.Transparent), center = c0, radius = halo),
+                            val pulse = 1f + 0.06f * kotlin.math.sin(shT * 18f)
+                            val halo = 16.dp.toPx()
+                            drawCircle(Brush.radialGradient(listOf(hc.a(0.28f), Color.Transparent), center = c0, radius = halo),
                                 radius = halo, center = c0)
                             val core = 6.dp.toPx() * pulse
-                            drawCircle(Brush.radialGradient(listOf(pal.shim.a(0.85f * (0.25f + 0.75f * tw)), hc.a(0.5f * (0.3f + 0.7f * tw)), Color.Transparent), center = c0, radius = core),
+                            drawCircle(Brush.radialGradient(listOf(pal.shim.a(0.85f), hc.a(0.5f), Color.Transparent), center = c0, radius = core),
                                 radius = core, center = c0)
                         }
                     })
@@ -1632,9 +1666,6 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             // الربع السفلي من الشاشة (منطقة إيماءة الخروج من التطبيق) ما يفعّل الشاشة الكاملة
                             val blockUp = !full && down.position.y > size.height * 0.86f
                             var prog = if (full) 1f else 0f
-                            // هزات برايل: نقطة بنفس الشدة كل مسافة ثابتة من السحب (بدون تصاعد)، نزولاً وصعوداً
-                            val brStep = 26.dp.toPx()
-                            var brIdx = 0
                             while (true) {
                                 val ev = awaitPointerEvent()
                                 val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
@@ -1684,16 +1715,6 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                     prog = if (mode == 1) (-ay / dist).coerceIn(0f, 1f) else 1f - ((if (rot) maxOf(ay, tot.y) else ay) / dist).coerceIn(0f, 1f)
                                     fpDrag = prog
                                     ch.consume()
-                                }
-                                if (mode != 0) {
-                                    // المسافة المقطوعة من نقطة البداية حسب نوع السحب؛ كل تغيّر في رقم النقطة = هزة وحدة
-                                    val travel = when (mode) {
-                                        1 -> (-ay).coerceAtLeast(0f)
-                                        3 -> ay.coerceAtLeast(0f)
-                                        else -> maxOf(kotlin.math.abs(tot.x), kotlin.math.abs(tot.y))
-                                    }
-                                    val idx = (travel / brStep).toInt()
-                                    if (idx != brIdx) { brIdx = idx; buzz(hapticView, false) }
                                 }
                                 lastPos = ch.position
                             }
