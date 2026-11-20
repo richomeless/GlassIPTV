@@ -446,13 +446,36 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
         val dv = androidx.compose.ui.platform.LocalView.current
         val win = ((dv as? androidx.compose.ui.window.DialogWindowProvider)
             ?: (dv.parent as? androidx.compose.ui.window.DialogWindowProvider))?.window
+        // نافذة الإعدادات تمتد تحت شريط الإشعارات بدون تعتيم، فيبقى لون الأعلى نفس لون باقي الشاشة
+        SideEffect {
+            win?.let { w ->
+                try {
+                    w.setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
+                    w.setDimAmount(0f)
+                    androidx.core.view.WindowCompat.setDecorFitsSystemWindows(w, false)
+                    w.statusBarColor = android.graphics.Color.TRANSPARENT
+                    w.navigationBarColor = android.graphics.Color.TRANSPARENT
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        w.isStatusBarContrastEnforced = false
+                        w.isNavigationBarContrastEnforced = false
+                    }
+                    val ic = androidx.core.view.WindowCompat.getInsetsController(w, w.decorView)
+                    ic.isAppearanceLightStatusBars = !pal.dark
+                    ic.isAppearanceLightNavigationBars = !pal.dark
+                } catch (_: Throwable) {}
+            }
+        }
         var snap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
         var prog by remember { mutableFloatStateOf(0f) }
         var origin by remember { mutableStateOf(Offset.Zero) }
         var lastDown by remember { mutableStateOf(Offset.Zero) }
         LaunchedEffect(snap) {
             if (snap != null) {
-                androidx.compose.animation.core.animate(0f, 1f, animationSpec = tween(650, easing = FastOutSlowInEasing)) { v, _ -> prog = v }
+                // ننتظر فريمين عشان إعادة رسم الثيم الجديد (التقيلة) تخلص قبل ما تبدأ الحركة، وما تبلع أول الفريمات
+                androidx.compose.runtime.withFrameNanos { }
+                androidx.compose.runtime.withFrameNanos { }
+                androidx.compose.animation.core.animate(0f, 1f,
+                    animationSpec = tween(850, easing = androidx.compose.animation.core.CubicBezierEasing(0.22f, 0f, 0.1f, 1f))) { v, _ -> prog = v }
                 snap = null
             }
         }
@@ -512,17 +535,30 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
                 SettingAction("سحب السجل (Logs)", onLogs)
                 Spacer(Modifier.height(24.dp))
             }
-            // طبقة الوضع القديم: تغطي الشاشة وتنثقب بدائرة تكبر من مكان الإصبع فيظهر الوضع الجديد تحتها
+            // طبقة الوضع القديم: تغطي الشاشة ويُمسح منها بدائرة حوافها مموهة تكبر من مكان الإصبع فيظهر الوضع الجديد تحتها
             val sn = snap
-            if (sn != null) Spacer(Modifier.fillMaxSize().drawBehind {
-                val w = size.width; val h = size.height
-                val dx = maxOf(origin.x, w - origin.x); val dy = maxOf(origin.y, h - origin.y)
-                val r = kotlin.math.sqrt(dx * dx + dy * dy) * prog
-                val hole = Path().apply { addOval(Rect(center = origin, radius = r)) }
-                clipPath(hole, clipOp = ClipOp.Difference) {
-                    drawImage(sn, dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()))
-                }
-            })
+            if (sn != null) Spacer(Modifier.fillMaxSize()
+                .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+                .drawBehind {
+                    val w = size.width; val h = size.height
+                    val feather = 130.dp.toPx()
+                    val dx = maxOf(origin.x, w - origin.x); val dy = maxOf(origin.y, h - origin.y)
+                    val maxR = kotlin.math.sqrt(dx * dx + dy * dy)
+                    val rad = (maxR + feather) * prog
+                    val exact = sn.width == w.toInt() && sn.height == h.toInt()
+                    drawImage(sn, dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()),
+                        filterQuality = if (exact) androidx.compose.ui.graphics.FilterQuality.None else androidx.compose.ui.graphics.FilterQuality.Low)
+                    if (rad > 1f) {
+                        val inner = ((rad - feather) / rad).coerceIn(0f, 1f)
+                        drawRect(
+                            Brush.radialGradient(
+                                0f to Color.Black, inner to Color.Black, 1f to Color.Transparent,
+                                center = origin, radius = rad
+                            ),
+                            blendMode = androidx.compose.ui.graphics.BlendMode.DstOut
+                        )
+                    }
+                })
         }
     }
 }
