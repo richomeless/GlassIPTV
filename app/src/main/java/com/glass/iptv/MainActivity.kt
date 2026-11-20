@@ -52,6 +52,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
@@ -516,7 +517,6 @@ fun scrollTick(v: View) {
 @Composable
 fun ScrollTicks(state: LazyGridState, view: View) {
     val d = androidx.compose.ui.platform.LocalDensity.current
-    val tickPx = with(d) { 36.dp.toPx() }
     val gapPx = with(d) { 14.dp.toPx() }
     // عند الوصول لأعلى القائمة أو أسفلها: نفس هزة تغيير البلاي ليست
     LaunchedEffect(state) {
@@ -529,25 +529,45 @@ fun ScrollTicks(state: LazyGridState, view: View) {
             if ((hitTop || hitBottom) && state.isScrollInProgress) buzz(view, false, scroll = true)
         }
     }
+    // الهزات حسب سرعة التمرير: بطيء = هزات بطيئة، سريع = هزات سريعة (والفلينج يبطّأ تدريجياً مع نزول السرعة)
     LaunchedEffect(state) {
-        var last = Float.NaN
-        var lastT = 0L
-        snapshotFlow {
+        val density = d.density
+        val minPx = with(d) { 6.dp.toPx() }
+        fun posNow(): Float {
             val items = state.layoutInfo.visibleItemsInfo
-            val f = items.firstOrNull()
-            if (f == null) Float.NaN else {
-                val cols = items.count { it.offset.y == f.offset.y }.coerceAtLeast(1)
-                (f.index / cols) * (f.size.height + gapPx) - f.offset.y
-            }
-        }.collect { pos ->
-            if (pos.isNaN()) { last = Float.NaN; return@collect }
-            if (last.isNaN() || !state.isScrollInProgress) { last = pos; return@collect }
-            val delta = pos - last
-            val steps = (kotlin.math.abs(delta) / tickPx).toInt()
-            if (steps >= 1) {
-                val now = android.os.SystemClock.uptimeMillis()
-                if (now - lastT >= 20L) { lastT = now; scrollTick(view) }
-                last = if (steps > 6) pos else last + (if (delta > 0) steps else -steps) * tickPx
+            val f = items.firstOrNull() ?: return Float.NaN
+            val cols = items.count { it.offset.y == f.offset.y }.coerceAtLeast(1)
+            return (f.index / cols) * (f.size.height + gapPx) - f.offset.y
+        }
+        snapshotFlow { state.isScrollInProgress }.collectLatest { scrolling ->
+            if (!scrolling) return@collectLatest
+            var lastPos = posNow()
+            var lastMs = -1L
+            var speed = 0f          // px/s بعد التنعيم
+            var accum = 0f          // المسافة المقطوعة منذ آخر هزة
+            var lastTickMs = 0L
+            while (state.isScrollInProgress) {
+                androidx.compose.runtime.withFrameNanos { ns ->
+                    val t = ns / 1_000_000L
+                    val pos = posNow()
+                    if (pos.isNaN() || lastPos.isNaN()) { lastPos = pos; lastMs = t; return@withFrameNanos }
+                    if (lastMs < 0L) { lastMs = t; lastPos = pos; return@withFrameNanos }
+                    val dt = (t - lastMs).coerceAtLeast(1L)
+                    val delta = kotlin.math.abs(pos - lastPos)
+                    lastPos = pos; lastMs = t
+                    speed = speed * 0.75f + (delta / dt * 1000f) * 0.25f
+                    accum += delta
+                    val sDp = speed / density
+                    // الفاصل بين الهزات: 260ms عند التمرير البطيء جداً ... 30ms عند التمرير السريع
+                    val slow = 60f; val fast = 2400f
+                    val frac = if (sDp <= slow) 0f else if (sDp >= fast) 1f
+                        else (kotlin.math.ln(sDp / slow) / kotlin.math.ln(fast / slow))
+                    val interval = (260.0 * Math.pow(30.0 / 260.0, frac.toDouble())).toLong()
+                    if (accum >= minPx && t - lastTickMs >= interval) {
+                        lastTickMs = t; accum = 0f
+                        scrollTick(view)
+                    }
+                }
             }
         }
     }
