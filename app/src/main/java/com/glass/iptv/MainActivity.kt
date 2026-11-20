@@ -165,6 +165,11 @@ class Store(ctx: Context) {
         if (b) s.add(url) else s.remove(url)
         p.edit().putString("arf", s.joinToString("\n")).apply()
     }
+    // الاهتزازات: الكل / الواجهة الرئيسية (البلاي ليست) / مشغل الفيديو
+    fun hapAll(): Boolean = p.getBoolean("hap_all", true)
+    fun hapList(): Boolean = p.getBoolean("hap_list", true)
+    fun hapVideo(): Boolean = p.getBoolean("hap_video", true)
+    fun setHap(key: String, b: Boolean) = p.edit().putBoolean(key, b).apply()
     fun pipMode(): Boolean = p.getBoolean("pip", true)
     fun setPipMode(b: Boolean) = p.edit().putBoolean("pip", b).apply()
     fun favs(): List<Channel> = (p.getString("fav", "") ?: "").split("\n").filter { it.isNotBlank() }.map {
@@ -359,9 +364,60 @@ fun SettingChoice(t: String, sel: Boolean, enabled: Boolean, modifier: Modifier,
     }
 }
 
-// صفحة الإعدادات: وضع الألوان + الثيم
+// صف مفتاح فرعي داخل إعدادات الاهتزازات
 @Composable
-fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) -> Unit, onClose: () -> Unit) {
+fun HapSubRow(t: String, on: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    val pal = LocalPal.current
+    Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(t, color = pal.text.copy(alpha = if (enabled) 1f else 0.4f), fontSize = 14.sp, modifier = Modifier.weight(1f))
+        Switch(checked = on, onCheckedChange = onChange, enabled = enabled)
+    }
+}
+
+// الاهتزازات: مفتاح عام للكل، ولما تفتح السهم يظهر مفتاحين: الواجهة الرئيسية (البلاي ليست) ومشغل الفيديو
+@Composable
+fun HapticsSetting(all: Boolean, list: Boolean, video: Boolean,
+                   onAll: (Boolean) -> Unit, onList: (Boolean) -> Unit, onVideo: (Boolean) -> Unit) {
+    val pal = LocalPal.current
+    var open by remember { mutableStateOf(false) }
+    val rot by animateFloatAsState(if (open) 90f else 0f, label = "hapRot")
+    Column(Modifier.fillMaxWidth().glass(20.dp)) {
+        Row(Modifier.fillMaxWidth().height(68.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f).fillMaxHeight().clickable { open = !open }.padding(horizontal = 18.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("الاهتزازات", color = pal.text, fontSize = 16.sp)
+                    Text(if (all) "مفعّلة" else "متوقفة", color = pal.textDim, fontSize = 12.sp)
+                }
+                Icon(IChev, contentDescription = null, tint = pal.textDim,
+                    modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = rot })
+            }
+            Box(Modifier.width(1.dp).height(34.dp).background(pal.glassStroke))
+            Box(Modifier.padding(horizontal = 16.dp)) { Switch(checked = all, onCheckedChange = onAll) }
+        }
+        if (open) Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 16.dp, bottom = 6.dp)) {
+            HapSubRow("اهتزازات الواجهة الرئيسية (البلاي ليست)", list, all, onList)
+            HapSubRow("اهتزازات مشغل الفيديو", video, all, onVideo)
+        }
+    }
+}
+
+// صف إجراء في الإعدادات (إضافة رابط، سحب السجل)
+@Composable
+fun SettingAction(t: String, onClick: () -> Unit) {
+    val pal = LocalPal.current
+    Box(Modifier.fillMaxWidth().height(56.dp).glass(20.dp).clickable(onClick = onClick).padding(horizontal = 18.dp),
+        contentAlignment = Alignment.CenterStart) {
+        Text(t, color = pal.text, fontSize = 16.sp)
+    }
+}
+
+// صفحة الإعدادات: وضع الألوان + الثيم + الاهتزازات + إضافة رابط + السجل
+@Composable
+fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) -> Unit,
+                   hapAll: Boolean, hapList: Boolean, hapVideo: Boolean,
+                   onHapAll: (Boolean) -> Unit, onHapList: (Boolean) -> Unit, onHapVideo: (Boolean) -> Unit,
+                   onAddLink: () -> Unit, onLogs: () -> Unit, onClose: () -> Unit) {
     val pal = LocalPal.current
     val view = androidx.compose.ui.platform.LocalView.current
     val myOk = Build.VERSION.SDK_INT >= 31
@@ -402,6 +458,13 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
                     modifier = Modifier.padding(start = 4.dp, top = 10.dp))
                 else Text("ألوان الواجهة تتبع خلفية الجوال", color = pal.textDim, fontSize = 12.sp,
                     modifier = Modifier.padding(start = 4.dp, top = 10.dp))
+                Spacer(Modifier.height(28.dp))
+                HapticsSetting(hapAll, hapList, hapVideo, onHapAll, onHapList, onHapVideo)
+                Spacer(Modifier.height(28.dp))
+                SettingAction("إضافة رابط", onAddLink)
+                Spacer(Modifier.height(10.dp))
+                SettingAction("سحب السجل (Logs)", onLogs)
+                Spacer(Modifier.height(24.dp))
             }
         }
     }
@@ -414,8 +477,18 @@ fun Modifier.glass(r: Dp = 24.dp, clipContent: Boolean = true): Modifier = compo
 }
 
 // هزة خفيفة: نجرب هزة النظام أول، وإذا ما اشتغلت نجرب الاهتزاز المباشر
+// إعدادات الاهتزاز العامة: inPlayer = مشغل الفيديو مفتوح، وإلا نحن في الواجهة الرئيسية
+object Hap {
+    @Volatile var all = true
+    @Volatile var list = true
+    @Volatile var video = true
+    @Volatile var inPlayer = false
+    fun allowed(): Boolean = all && (if (inPlayer) video else list)
+}
+
 // نقرة خفيفة وحادة لتأثير برايل أثناء التمرير
 fun scrollTick(v: View) {
+    if (!Hap.allowed()) return
     val ok = try {
         val c = when {
             Build.VERSION.SDK_INT >= 34 -> android.view.HapticFeedbackConstants.SEGMENT_FREQUENT_TICK
@@ -441,6 +514,17 @@ fun ScrollTicks(state: LazyGridState, view: View) {
     val d = androidx.compose.ui.platform.LocalDensity.current
     val tickPx = with(d) { 36.dp.toPx() }
     val gapPx = with(d) { 14.dp.toPx() }
+    // عند الوصول لأعلى القائمة أو أسفلها: نفس هزة تغيير البلاي ليست
+    LaunchedEffect(state) {
+        var prevBack = state.canScrollBackward
+        var prevFwd = state.canScrollForward
+        snapshotFlow { Pair(state.canScrollBackward, state.canScrollForward) }.collect { (back, fwd) ->
+            val hitTop = prevBack && !back
+            val hitBottom = prevFwd && !fwd
+            prevBack = back; prevFwd = fwd
+            if ((hitTop || hitBottom) && state.isScrollInProgress) buzz(view, false)
+        }
+    }
     LaunchedEffect(state) {
         var last = Float.NaN
         var lastT = 0L
@@ -466,6 +550,7 @@ fun ScrollTicks(state: LazyGridState, view: View) {
 }
 
 fun buzz(v: View, release: Boolean) {
+    if (!Hap.allowed()) return
     val ok = try {
         val c = if (release && Build.VERSION.SDK_INT >= 27) android.view.HapticFeedbackConstants.VIRTUAL_KEY_RELEASE
                 else android.view.HapticFeedbackConstants.VIRTUAL_KEY
@@ -726,6 +811,8 @@ val IFull = mkIcon("M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM
 val IFullExit = mkIcon("M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z")
 val IPip = mkIcon("M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z")
 val ISort = mkIcon("M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z")
+val IGear = mkIcon("M19.14,12.94c0.04,-0.3 0.06,-0.61 0.06,-0.94c0,-0.32 -0.02,-0.64 -0.07,-0.94l2.03,-1.58c0.18,-0.14 0.23,-0.41 0.12,-0.61l-1.92,-3.32c-0.12,-0.22 -0.37,-0.29 -0.59,-0.22l-2.39,0.96c-0.5,-0.38 -1.03,-0.7 -1.62,-0.94L14.4,2.81c-0.04,-0.24 -0.24,-0.41 -0.48,-0.41h-3.84c-0.24,0 -0.43,0.17 -0.47,0.41L9.25,5.35C8.66,5.59 8.12,5.92 7.63,6.29L5.24,5.33c-0.22,-0.08 -0.47,0 -0.59,0.22L2.74,8.87C2.62,9.08 2.66,9.34 2.86,9.48l2.03,1.58C4.84,11.36 4.8,11.69 4.8,12s0.02,0.64 0.07,0.94l-2.03,1.58c-0.18,0.14 -0.23,0.41 -0.12,0.61l1.92,3.32c0.12,0.22 0.37,0.29 0.59,0.22l2.39,-0.96c0.5,0.38 1.03,0.7 1.62,0.94l0.36,2.54c0.05,0.24 0.24,0.41 0.48,0.41h3.84c0.24,0 0.44,-0.17 0.47,-0.41l0.36,-2.54c0.59,-0.24 1.13,-0.56 1.62,-0.94l2.39,0.96c0.22,0.08 0.47,0 0.59,-0.22l1.92,-3.32c0.12,-0.22 0.07,-0.47 -0.12,-0.61L19.14,12.94zM12,15.6c-1.98,0 -3.6,-1.62 -3.6,-3.6s1.62,-3.6 3.6,-3.6s3.6,1.62 3.6,3.6S13.98,15.6 12,15.6z")
+val IChev = mkIcon("M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z")
 val IMore = mkIcon("M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z")
 val IHead = mkIcon("M12 1c-4.97 0-9 4.03-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.87 3.13-7 7-7s7 3.13 7 7v2h-4v8h3c1.66 0 3-1.34 3-3v-7c0-4.97-4.03-9-9-9z")
 
@@ -1058,11 +1145,11 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
     var loading by remember { mutableStateOf(false) }
     var url by remember { mutableStateOf("") }
     var showAdd by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
-    var playing by remember { mutableStateOf(player?.isPlaying == true) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var full by remember { mutableStateOf(false) }
     var cur by remember { mutableStateOf<Channel?>(null) }
+    var hapAll by remember { mutableStateOf(store.hapAll()) }
+    var hapList by remember { mutableStateOf(store.hapList()) }
+    var hapVideo by remember { mutableStateOf(store.hapVideo()) }
+    SideEffect { Hap.all = hapAll; Hap.list = hapList; Hap.video = hapVideo; Hap.inPlayer = cur != null }
     var ui by remember { mutableStateOf(true) }
     var zoom by remember { mutableStateOf(1f) }
     var panX by remember { mutableStateOf(0f) }
@@ -1108,6 +1195,28 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
     var menu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val hapticView = androidx.compose.ui.platform.LocalView.current
+    fun pullLogs() {
+        scope.launch {
+            val t = withContext(Dispatchers.IO) { Logs.collect(ctx) }
+            try {
+                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("Glass IPTV log", t))
+            } catch (_: Throwable) {}
+            Toast.makeText(ctx, "تم نسخ السجل", Toast.LENGTH_SHORT).show()
+            try {
+                val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(android.content.Intent.EXTRA_SUBJECT, "Glass IPTV log")
+                    putExtra(android.content.Intent.EXTRA_TEXT, t)
+                }
+                ctx.startActivity(android.content.Intent.createChooser(send, "مشاركة السجل").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (_: Throwable) {}
+        }
+    }
+    var showSettings by remember { mutableStateOf(false) }
+    var playing by remember { mutableStateOf(player?.isPlaying == true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var full by remember { mutableStateOf(false) }
     // الأزرار تختفي تلقائياً بعد 5 ثواني من ظهورها (يتجدد العد عند أي لمسة على الأزرار)
     var uiTick by remember { mutableStateOf(0) }
     LaunchedEffect(cur, ui, menu, uiTick) {
@@ -1555,33 +1664,8 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                 }
                             }
                             Spacer(Modifier.width(8.dp))
-                            Box {
-                                Box(Modifier.size(40.dp).glass(14.dp).clickable { menuMore = true }, contentAlignment = Alignment.Center) {
-                                    Icon(IMore, contentDescription = null, tint = pal.text, modifier = Modifier.size(22.dp))
-                                }
-                                DropdownMenu(expanded = menuMore, onDismissRequest = { menuMore = false }) {
-                                    DropdownMenuItem(text = { Text("الإعدادات") }, onClick = { menuMore = false; showSettings = true })
-                                    DropdownMenuItem(text = { Text("إضافة رابط") }, onClick = { menuMore = false; showAdd = true })
-                                    DropdownMenuItem(text = { Text("سحب السجل (Logs)") }, onClick = {
-                                        menuMore = false
-                                        scope.launch {
-                                            val t = withContext(Dispatchers.IO) { Logs.collect(ctx) }
-                                            try {
-                                                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                                cm.setPrimaryClip(android.content.ClipData.newPlainText("Glass IPTV log", t))
-                                            } catch (_: Throwable) {}
-                                            Toast.makeText(ctx, "تم نسخ السجل", Toast.LENGTH_SHORT).show()
-                                            try {
-                                                val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                                    type = "text/plain"
-                                                    putExtra(android.content.Intent.EXTRA_SUBJECT, "Glass IPTV log")
-                                                    putExtra(android.content.Intent.EXTRA_TEXT, t)
-                                                }
-                                                ctx.startActivity(android.content.Intent.createChooser(send, "مشاركة السجل").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
-                                            } catch (_: Throwable) {}
-                                        }
-                                    })
-                                }
+                            Box(Modifier.size(40.dp).glass(14.dp).clickable { showSettings = true }, contentAlignment = Alignment.Center) {
+                                Icon(IGear, contentDescription = null, tint = pal.text, modifier = Modifier.size(22.dp))
                             }
                         }
                         LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)) {
@@ -2015,6 +2099,12 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
     if (showSettings) SettingsDialog(
         mode = themeMode, style = themeStyle,
         onMode = { onTheme(it, themeStyle) }, onStyle = { onTheme(themeMode, it) },
+        hapAll = hapAll, hapList = hapList, hapVideo = hapVideo,
+        onHapAll = { hapAll = it; Hap.all = it; store.setHap("hap_all", it); if (it) buzz(hapticView, false) },
+        onHapList = { hapList = it; Hap.list = it; store.setHap("hap_list", it); if (it) buzz(hapticView, false) },
+        onHapVideo = { hapVideo = it; Hap.video = it; store.setHap("hap_video", it) },
+        onAddLink = { showSettings = false; showAdd = true },
+        onLogs = { pullLogs() },
         onClose = { showSettings = false }
     )
 
