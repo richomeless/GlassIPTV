@@ -2010,8 +2010,8 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                     ch.consume()
                                 } else if (mode == 1 || mode == 2) {
                                     // الفيديو يلحق إصبعك بنفس الاتجاه (في الخروج من الشاشة الكاملة: أي اتجاه)
-                                    if (mode == 1 && sideways) { fsDx = tot.x; fsDy = tot.y.coerceAtMost(0f) }
-                                    else if (mode == 1) fsDy = tot.y.coerceAtMost(0f)
+                                    // دخول الشاشة الكاملة: الفيديو يلحق الإصبع بأي زاوية (قطري 45° أو أفقي أو عمودي) ولا يرتفع عمودياً فقط
+                                    if (mode == 1) { fsDx = tot.x; fsDy = tot.y.coerceAtMost(0f) }
                                     else { fsDx = tot.x; fsDy = tot.y }
                                     fsDrag = 1f
                                     ch.consume()
@@ -2032,7 +2032,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                 if (mode != 0) {
                                     // المسافة المقطوعة من نقطة البداية حسب نوع السحب؛ كل تغيّر في رقم النقطة = هزة وحدة
                                     val travel = when (mode) {
-                                        1 -> if (sideways) kotlin.math.abs(tot.x) else (-ay).coerceAtLeast(0f)
+                                        1 -> kotlin.math.sqrt(tot.x * tot.x + tot.y.coerceAtMost(0f) * tot.y.coerceAtMost(0f))
                                         3 -> ay.coerceAtLeast(0f)
                                         else -> maxOf(kotlin.math.abs(tot.x), kotlin.math.abs(tot.y))
                                     }
@@ -2044,9 +2044,14 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             if (mode == 1 || mode == 2) {
                                 val v = vt.calculateVelocity()
                                 val dispX = kotlin.math.abs(fsDx); val dispY = kotlin.math.abs(fsDy)
-                                val disp = if (mode == 1 && sideways) dispX else if (mode == 1) -fsDy else maxOf(dispX, dispY)
-                                val thr = if ((mode == 2 && dispX > dispY) || (mode == 1 && sideways)) size.width * 0.12f else size.height * 0.12f
-                                val vel = if (mode == 1 && sideways) kotlin.math.abs(v.x) else if (mode == 1) -v.y else kotlin.math.sqrt(v.x * v.x + v.y * v.y)
+                                val dist1 = kotlin.math.sqrt(dispX * dispX + dispY * dispY)
+                                val disp = if (mode == 1) dist1 else maxOf(dispX, dispY)
+                                // الحد: بين 12% من العرض (أفقي) و12% من الارتفاع (عمودي) حسب زاوية السحب
+                                val fracV = if (dist1 > 0f) dispY / dist1 else 1f
+                                val thr = if (mode == 1) size.width * 0.12f * (1f - fracV) + size.height * 0.12f * fracV
+                                          else if (mode == 2 && dispX > dispY) size.width * 0.12f else size.height * 0.12f
+                                val vel = if (mode == 1) kotlin.math.sqrt(v.x * v.x + v.y.coerceAtMost(0f) * v.y.coerceAtMost(0f))
+                                          else kotlin.math.sqrt(v.x * v.x + v.y * v.y)
                                 val go = disp > thr || vel > 900f
                                 val enter = mode == 1
                                 scope.launch {
