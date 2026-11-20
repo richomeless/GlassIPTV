@@ -491,11 +491,12 @@ object Hap {
     fun scrollAllowed(): Boolean = all && scroll
 }
 
-// نقرة ناعمة جداً لتأثير برايل (أضعف من هزات النظام الجاهزة): PRIMITIVE_LOW_TICK بقوة منخفضة، أو نبضة قصيرة جداً بسعة ضعيفة
+// نقرة ناعمة لتأثير برايل: PRIMITIVE_LOW_TICK بقوة متوسطة-منخفضة، أو نبضة قصيرة بسعة ضعيفة، مع تصنيفها كلمس عشان النظام ما يكتمها
 private var softVib: android.os.Vibrator? = null
 private var softPrim = false
 fun scrollTick(v: View) {
     if (!Hap.scrollAllowed()) return
+    var done = false
     try {
         var vib = softVib
         if (vib == null) {
@@ -509,14 +510,33 @@ fun scrollTick(v: View) {
             softPrim = Build.VERSION.SDK_INT >= 30 &&
                 vib.areAllPrimitivesSupported(android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK)
         }
-        val effect = if (softPrim) {
-            android.os.VibrationEffect.startComposition()
-                .addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK, 0.35f)
-                .compose()
-        } else {
-            android.os.VibrationEffect.createOneShot(3L, 40)
+        if (vib != null && vib.hasVibrator()) {
+            val effect = if (softPrim) {
+                android.os.VibrationEffect.startComposition()
+                    .addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK, 0.6f)
+                    .compose()
+            } else {
+                android.os.VibrationEffect.createOneShot(5L, 60)
+            }
+            if (Build.VERSION.SDK_INT >= 33) {
+                vib.vibrate(effect, android.os.VibrationAttributes.createForUsage(android.os.VibrationAttributes.USAGE_TOUCH))
+            } else {
+                @Suppress("DEPRECATION")
+                vib.vibrate(effect, android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+            }
+            done = true
         }
-        vib!!.vibrate(effect)
+    } catch (_: Throwable) {}
+    // لو الاهتزاز المباشر فشل لأي سبب: هزة النظام الجاهزة كخطة بديلة
+    if (!done) try {
+        val c = when {
+            Build.VERSION.SDK_INT >= 34 -> android.view.HapticFeedbackConstants.SEGMENT_FREQUENT_TICK
+            Build.VERSION.SDK_INT >= 27 -> android.view.HapticFeedbackConstants.TEXT_HANDLE_MOVE
+            else -> android.view.HapticFeedbackConstants.CLOCK_TICK
+        }
+        v.performHapticFeedback(c)
     } catch (_: Throwable) {}
 }
 
@@ -890,12 +910,11 @@ fun Tile(c: Channel, fav: Boolean, onLong: () -> Unit, onClick: (Rect) -> Unit) 
             else {
                 // نصغّر الشعار وقت فك الضغط عشان التمرير يبقى سلس
                 val req = remember(c.logo) { ImageRequest.Builder(ctx).data(c.logo).size(180).crossfade(false).build() }
-                // ظل ناعم تحت الشعار في الوضع الفاتح فقط (أندرويد 12+) عشان الشعارات البيضاء تبان
+                // ظل خفيف تحت الشعار في الوضع الفاتح فقط عشان الشعارات البيضاء تبان (بدون blur عشان التمرير يبقى سلس)
                 if (!LocalPal.current.dark && Build.VERSION.SDK_INT >= 31) {
                     AsyncImage(model = req, contentDescription = null, contentScale = ContentScale.Fit,
-                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.Black.copy(alpha = 0.4f), androidx.compose.ui.graphics.BlendMode.SrcIn),
-                        modifier = Modifier.fillMaxSize().padding(14.dp).offset(y = 1.5.dp)
-                            .blur(2.5.dp, androidx.compose.ui.draw.BlurredEdgeTreatment.Unbounded))
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.Black.copy(alpha = 0.28f), androidx.compose.ui.graphics.BlendMode.SrcIn),
+                        modifier = Modifier.fillMaxSize().padding(14.dp).offset(y = 2.dp))
                 }
                 AsyncImage(model = req, contentDescription = null, contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxSize().padding(14.dp))
