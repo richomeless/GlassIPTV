@@ -419,7 +419,7 @@ fun SettingAction(t: String, onClick: () -> Unit) {
 }
 
 // لقطة حالة الوضع القديم لتأثير الدائرة الكاشفة
-class RevealSnap(val pal: Pal, val scheme: ColorScheme, val mode: Int, val style: Int)
+class RevealSnap(val pal: Pal, val scheme: ColorScheme, val mode: Int, val style: Int, val kind: Int)
 
 // جسم صفحة الإعدادات (الخلفية + المحتوى). يُرسم مرتين أثناء تبديل الوضع بنفس الكود تماماً:
 // الجديد تحت، والقديم فوقه يُمسح بدائرة حوافها مموهة. لأنهم نفس التصميم بالضبط ما في أي إزاحة بينهم.
@@ -502,14 +502,15 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
             androidx.compose.runtime.withFrameNanos { }
             androidx.compose.runtime.withFrameNanos { }
             androidx.compose.animation.core.animate(0f, 1f,
-                animationSpec = tween(850, easing = androidx.compose.animation.core.CubicBezierEasing(0.22f, 0f, 0.1f, 1f))) { v, _ -> prog = v }
+                animationSpec = tween(if (snap?.kind == 1) 1000 else 850,
+                    easing = androidx.compose.animation.core.CubicBezierEasing(if (snap?.kind == 1) 0.4f else 0.22f, 0f, if (snap?.kind == 1) 0.2f else 0.1f, 1f))) { v, _ -> prog = v }
             snap = null
         }
     }
     // نحفظ حالة الوضع القديم، نبدّل الوضع، ونكشف الجديد بدائرة تنتشر من مكان الإصبع
-    fun revealThen(apply: () -> Unit) {
+    fun revealThen(kind: Int, apply: () -> Unit) {
         prog = 0f; origin = lastDown
-        snap = RevealSnap(pal, scheme, mode, style)
+        snap = RevealSnap(pal, scheme, mode, style, kind)
         revealId++
         apply()
     }
@@ -522,7 +523,7 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
                 }
             }
     ) {
-        SettingsBody(mode, style, { m -> revealThen { onMode(m) } }, onStyle,
+        SettingsBody(mode, style, { m -> revealThen(0) { onMode(m) } }, { st -> revealThen(1) { onStyle(st) } },
             hapAll, hapList, hapVideo, hapScroll, onHapAll, onHapList, onHapVideo, onHapScroll,
             hapOpen, { hapOpen = it }, onAddLink, onLogs, onClose, scroll, view)
         val sn = snap
@@ -532,19 +533,50 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
                 .drawWithContent {
                     drawContent()
                     val w = size.width; val h = size.height
-                    val feather = 130.dp.toPx()
-                    val dx = maxOf(origin.x, w - origin.x); val dy = maxOf(origin.y, h - origin.y)
-                    val maxR = kotlin.math.sqrt(dx * dx + dy * dy)
-                    val rad = (maxR + feather) * prog
-                    if (rad > 1f) {
-                        val inner = ((rad - feather) / rad).coerceIn(0f, 1f)
+                    if (sn.kind == 0) {
+                        // تبديل فاتح/داكن: دائرة حوافها مموهة تنتشر من مكان الإصبع
+                        val feather = 130.dp.toPx()
+                        val dx = maxOf(origin.x, w - origin.x); val dy = maxOf(origin.y, h - origin.y)
+                        val maxR = kotlin.math.sqrt(dx * dx + dy * dy)
+                        val rad = (maxR + feather) * prog
+                        if (rad > 1f) {
+                            val inner = ((rad - feather) / rad).coerceIn(0f, 1f)
+                            drawRect(
+                                Brush.radialGradient(
+                                    0f to Color.Black, inner to Color.Black, 1f to Color.Transparent,
+                                    center = origin, radius = rad
+                                ),
+                                blendMode = androidx.compose.ui.graphics.BlendMode.DstOut
+                            )
+                        }
+                    } else {
+                        // تبديل الثيم: موجة ضوء مائلة تكنس الشاشة من جهة الزر اللي ضغطته، وخلفها يظهر الثيم الجديد، مع وهج بلون الثيم الجديد على حافتها
+                        val feather = 280.dp.toPx()
+                        val sgn = if (origin.x < w / 2f) 1f else -1f
+                        val ang = 0.32f
+                        val ux = sgn * kotlin.math.cos(ang); val uy = kotlin.math.sin(ang)
+                        val half = kotlin.math.abs(ux) * w / 2f + kotlin.math.abs(uy) * h / 2f
+                        val t = -half + (2f * half + feather) * prog
+                        val c = Offset(w / 2f, h / 2f)
+                        val d = Offset(ux, uy)
                         drawRect(
-                            Brush.radialGradient(
-                                0f to Color.Black, inner to Color.Black, 1f to Color.Transparent,
-                                center = origin, radius = rad
+                            Brush.linearGradient(
+                                0f to Color.Black, 1f to Color.Transparent,
+                                start = c + d * (t - feather), end = c + d * t
                             ),
                             blendMode = androidx.compose.ui.graphics.BlendMode.DstOut
                         )
+                        val glowA = kotlin.math.sin(Math.PI.toFloat() * prog.coerceIn(0f, 1f))
+                        if (glowA > 0.01f) {
+                            val mid = t - feather * 0.5f
+                            val hw = feather * 0.38f
+                            drawRect(
+                                Brush.linearGradient(
+                                    0f to Color.Transparent, 0.5f to pal.dot.copy(alpha = 0.38f * glowA), 1f to Color.Transparent,
+                                    start = c + d * (mid - hw), end = c + d * (mid + hw)
+                                )
+                            )
+                        }
                     }
                 }
                 // أثناء الحركة (أقل من ثانية) نتجاهل اللمس عشان ما يتداخل مع النسخة القديمة
