@@ -25,11 +25,6 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.exponentialDecay
-import androidx.compose.animation.core.AnimationState
-import androidx.compose.animation.core.DecayAnimationSpec
-import androidx.compose.animation.core.animateDecay
-import androidx.compose.foundation.gestures.FlingBehavior
-import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -496,46 +491,33 @@ object Hap {
     fun scrollAllowed(): Boolean = all && scroll
 }
 
-// نقرة خفيفة وحادة لتأثير برايل أثناء التمرير
+// نقرة ناعمة جداً لتأثير برايل (أضعف من هزات النظام الجاهزة): PRIMITIVE_LOW_TICK بقوة منخفضة، أو نبضة قصيرة جداً بسعة ضعيفة
+private var softVib: android.os.Vibrator? = null
+private var softPrim = false
 fun scrollTick(v: View) {
     if (!Hap.scrollAllowed()) return
-    val ok = try {
-        val c = when {
-            Build.VERSION.SDK_INT >= 34 -> android.view.HapticFeedbackConstants.SEGMENT_FREQUENT_TICK
-            Build.VERSION.SDK_INT >= 27 -> android.view.HapticFeedbackConstants.TEXT_HANDLE_MOVE
-            else -> android.view.HapticFeedbackConstants.CLOCK_TICK
+    try {
+        var vib = softVib
+        if (vib == null) {
+            val ctx = v.context
+            vib = if (Build.VERSION.SDK_INT >= 31) {
+                ctx.getSystemService(android.os.VibratorManager::class.java).defaultVibrator
+            } else {
+                @Suppress("DEPRECATION") ctx.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+            }
+            softVib = vib
+            softPrim = Build.VERSION.SDK_INT >= 30 &&
+                vib.areAllPrimitivesSupported(android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK)
         }
-        v.performHapticFeedback(c)
-    } catch (_: Throwable) { false }
-    if (!ok) try {
-        val ctx = v.context
-        val vib: android.os.Vibrator = if (Build.VERSION.SDK_INT >= 31) {
-            ctx.getSystemService(android.os.VibratorManager::class.java).defaultVibrator
+        val effect = if (softPrim) {
+            android.os.VibrationEffect.startComposition()
+                .addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK, 0.35f)
+                .compose()
         } else {
-            ctx.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+            android.os.VibrationEffect.createOneShot(3L, 40)
         }
-        vib.vibrate(android.os.VibrationEffect.createOneShot(6L, 90))
+        vib!!.vibrate(effect)
     } catch (_: Throwable) {}
-}
-
-// سكرول أقوى وانزلاق أطول: السحبة القوية تنزل أسرع، والفرملة تدريجية بدون توقف مفاجئ
-class GlideFling(
-    private val decay: DecayAnimationSpec<Float> = exponentialDecay(frictionMultiplier = 0.55f)
-) : FlingBehavior {
-    override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
-        if (kotlin.math.abs(initialVelocity) <= 1f) return initialVelocity
-        val boost = 1.3f + 0.7f * (kotlin.math.abs(initialVelocity) / 5000f).coerceAtMost(1f)
-        var lastValue = 0f
-        var left = initialVelocity * boost
-        AnimationState(0f, left).animateDecay(decay) {
-            val delta = value - lastValue
-            val consumed = scrollBy(delta)
-            lastValue = value
-            left = velocity
-            if (kotlin.math.abs(delta - consumed) > 0.5f || kotlin.math.abs(velocity) < 30f) cancelAnimation()
-        }
-        return left
-    }
 }
 
 // تأثير برايل: هزة صغيرة كل مسافة تمرير قصيرة في قائمة القنوات، نزولاً وصعوداً
@@ -1645,7 +1627,6 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                         Box(Modifier.fillMaxSize()) {
                             LazyVerticalGrid(
                                 state = if (isFavPage) favState else gridState,
-                                flingBehavior = remember { GlideFling() },
                                 columns = GridCells.Adaptive(96.dp),
                                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = hh + 8.dp, bottom = 48.dp),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
