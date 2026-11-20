@@ -25,6 +25,11 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.exponentialDecay
+import androidx.compose.animation.core.AnimationState
+import androidx.compose.animation.core.DecayAnimationSpec
+import androidx.compose.animation.core.animateDecay
+import androidx.compose.foundation.gestures.FlingBehavior
+import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -511,6 +516,26 @@ fun scrollTick(v: View) {
         }
         vib.vibrate(android.os.VibrationEffect.createOneShot(6L, 90))
     } catch (_: Throwable) {}
+}
+
+// سكرول أقوى وانزلاق أطول: السحبة القوية تنزل أسرع، والفرملة تدريجية بدون توقف مفاجئ
+class GlideFling(
+    private val decay: DecayAnimationSpec<Float> = exponentialDecay(frictionMultiplier = 0.55f, absoluteVelocityThreshold = 30f)
+) : FlingBehavior {
+    override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
+        if (kotlin.math.abs(initialVelocity) <= 1f) return initialVelocity
+        val boost = 1.3f + 0.7f * (kotlin.math.abs(initialVelocity) / 5000f).coerceAtMost(1f)
+        var lastValue = 0f
+        var left = initialVelocity * boost
+        AnimationState(0f, left).animateDecay(decay) {
+            val delta = value - lastValue
+            val consumed = scrollBy(delta)
+            lastValue = value
+            left = velocity
+            if (kotlin.math.abs(delta - consumed) > 0.5f) cancelAnimation()
+        }
+        return left
+    }
 }
 
 // تأثير برايل: هزة صغيرة كل مسافة تمرير قصيرة في قائمة القنوات، نزولاً وصعوداً
@@ -1620,6 +1645,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                         Box(Modifier.fillMaxSize()) {
                             LazyVerticalGrid(
                                 state = if (isFavPage) favState else gridState,
+                                flingBehavior = remember { GlideFling() },
                                 columns = GridCells.Adaptive(96.dp),
                                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = hh + 8.dp, bottom = 48.dp),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
