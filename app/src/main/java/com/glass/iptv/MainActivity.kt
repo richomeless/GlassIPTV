@@ -80,6 +80,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.Path
@@ -415,6 +417,19 @@ fun SettingAction(t: String, onClick: () -> Unit) {
     }
 }
 
+// لقطة للنافذة (الإعدادات) قبل تبديل الوضع، نستخدمها لتأثير الدائرة الكاشفة
+fun snapshotWindow(win: android.view.Window?, done: (android.graphics.Bitmap?) -> Unit) {
+    if (win == null || Build.VERSION.SDK_INT < 26) { done(null); return }
+    try {
+        val dec = win.decorView
+        if (dec.width <= 0 || dec.height <= 0) { done(null); return }
+        val bmp = android.graphics.Bitmap.createBitmap(dec.width, dec.height, android.graphics.Bitmap.Config.ARGB_8888)
+        android.view.PixelCopy.request(win, bmp, { r ->
+            done(if (r == android.view.PixelCopy.SUCCESS) bmp else null)
+        }, android.os.Handler(android.os.Looper.getMainLooper()))
+    } catch (_: Throwable) { done(null) }
+}
+
 // صفحة الإعدادات: وضع الألوان + الثيم + الاهتزازات + إضافة رابط + السجل
 @Composable
 fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) -> Unit,
@@ -428,8 +443,36 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
         onDismissRequest = onClose,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        val dv = androidx.compose.ui.platform.LocalView.current
+        val win = ((dv as? androidx.compose.ui.window.DialogWindowProvider)
+            ?: (dv.parent as? androidx.compose.ui.window.DialogWindowProvider))?.window
+        var snap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+        var prog by remember { mutableFloatStateOf(0f) }
+        var origin by remember { mutableStateOf(Offset.Zero) }
+        var lastDown by remember { mutableStateOf(Offset.Zero) }
+        LaunchedEffect(snap) {
+            if (snap != null) {
+                androidx.compose.animation.core.animate(0f, 1f, animationSpec = tween(650, easing = FastOutSlowInEasing)) { v, _ -> prog = v }
+                snap = null
+            }
+        }
+        // نلتقط الشاشة بالوضع القديم، نبدّل الوضع، ونكشف الجديد بدائرة تنتشر من مكان الإصبع
+        fun revealThen(apply: () -> Unit) {
+            val from = lastDown
+            snapshotWindow(win) { bmp ->
+                if (bmp != null) { prog = 0f; origin = from; snap = bmp.asImageBitmap() }
+                apply()
+            }
+        }
         Box(
-            Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(pal.bg1, pal.bg2)))
+            Modifier.fillMaxSize()
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val d = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        lastDown = d.position
+                    }
+                }
+                .background(Brush.verticalGradient(listOf(pal.bg1, pal.bg2)))
                 .drawBehind {
                     drawRect(Brush.radialGradient(listOf(pal.blob1, Color.Transparent), Offset(size.width * 0.1f, size.height * 0.05f), size.width * 0.9f))
                     drawRect(Brush.radialGradient(listOf(pal.blob2, Color.Transparent), Offset(size.width * 0.95f, size.height * 0.95f), size.width * 0.9f))
@@ -448,7 +491,7 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
                 Text("وضع الألوان", color = pal.textDim, fontSize = 13.sp, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("حسب النظام", "فاتح", "داكن").forEachIndexed { i, t ->
-                        SettingChoice(t, mode == i, true, Modifier.weight(1f)) { if (mode != i) { buzz(view, false); onMode(i) } }
+                        SettingChoice(t, mode == i, true, Modifier.weight(1f)) { if (mode != i) { buzz(view, false); revealThen { onMode(i) } } }
                     }
                 }
                 Spacer(Modifier.height(28.dp))
@@ -469,6 +512,17 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
                 SettingAction("سحب السجل (Logs)", onLogs)
                 Spacer(Modifier.height(24.dp))
             }
+            // طبقة الوضع القديم: تغطي الشاشة وتنثقب بدائرة تكبر من مكان الإصبع فيظهر الوضع الجديد تحتها
+            val sn = snap
+            if (sn != null) Spacer(Modifier.fillMaxSize().drawBehind {
+                val w = size.width; val h = size.height
+                val dx = maxOf(origin.x, w - origin.x); val dy = maxOf(origin.y, h - origin.y)
+                val r = kotlin.math.sqrt(dx * dx + dy * dy) * prog
+                val hole = Path().apply { addOval(Rect(center = origin, radius = r)) }
+                clipPath(hole, clipOp = ClipOp.Difference) {
+                    drawImage(sn, dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()))
+                }
+            })
         }
     }
 }
