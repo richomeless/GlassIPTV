@@ -1970,7 +1970,10 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             var lastPos = down.position
                             val dist = 280.dp.toPx()
                             // الربع السفلي من الشاشة (منطقة إيماءة الخروج من التطبيق) ما يفعّل الشاشة الكاملة
-                            val blockUp = !full && down.position.y > size.height * 0.86f
+                            // الأطراف اليمين واليسار (هامش 48dp) مثلها: ما تفعّل الشاشة الكاملة، عشان إيماءة الرجوع من حافة الشاشة تشتغل بدون ما الفيديو يكبر
+                            val edgeW = 48.dp.toPx()
+                            val onEdge = down.position.x < edgeW || down.position.x > size.width - edgeW
+                            val blockUp = !full && (down.position.y > size.height * 0.86f || onEdge)
                             var prog = if (full) 1f else 0f
                             // هزات برايل: نقطة بنفس الشدة كل مسافة ثابتة من السحب (بدون تصاعد)، نزولاً وصعوداً
                             val brStep = 26.dp.toPx()
