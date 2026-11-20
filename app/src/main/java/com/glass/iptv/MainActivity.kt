@@ -59,6 +59,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
@@ -446,12 +447,15 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
         val dv = androidx.compose.ui.platform.LocalView.current
         val win = ((dv as? androidx.compose.ui.window.DialogWindowProvider)
             ?: (dv.parent as? androidx.compose.ui.window.DialogWindowProvider))?.window
-        // نافذة الإعدادات تمتد تحت شريط الإشعارات بدون تعتيم، فيبقى لون الأعلى نفس لون باقي الشاشة
-        SideEffect {
+        // نافذة الإعدادات تمتد تحت شريط الإشعارات بدون تعتيم. الإعداد مرة وحدة فقط (إعادته مع كل ضغطة كان يسبب رجة في النصوص)
+        LaunchedEffect(win) {
             win?.let { w ->
                 try {
                     w.setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
                     w.setDimAmount(0f)
+                    w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS or
+                        android.view.WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION)
+                    w.addFlags(android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
                     androidx.core.view.WindowCompat.setDecorFitsSystemWindows(w, false)
                     w.statusBarColor = android.graphics.Color.TRANSPARENT
                     w.navigationBarColor = android.graphics.Color.TRANSPARENT
@@ -459,12 +463,36 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
                         w.isStatusBarContrastEnforced = false
                         w.isNavigationBarContrastEnforced = false
                     }
-                    val ic = androidx.core.view.WindowCompat.getInsetsController(w, w.decorView)
-                    ic.isAppearanceLightStatusBars = !pal.dark
-                    ic.isAppearanceLightNavigationBars = !pal.dark
                 } catch (_: Throwable) {}
             }
         }
+        // لون أيقونات الشريط (واي فاي، بطارية، الساعة): غامقة في الفاتح وفاتحة في الداكن، على نافذة الإعدادات والتطبيق تحتها
+        LaunchedEffect(win, pal.dark) {
+            androidx.compose.runtime.withFrameNanos { }
+            val light = !pal.dark
+            fun setBars(w: android.view.Window?) {
+                if (w == null) return
+                try {
+                    val ic = androidx.core.view.WindowCompat.getInsetsController(w, w.decorView)
+                    ic.isAppearanceLightStatusBars = light
+                    ic.isAppearanceLightNavigationBars = light
+                    // احتياط للأجهزة اللي ما تلتزم بالطريقة الحديثة
+                    @Suppress("DEPRECATION")
+                    run {
+                        val dec = w.decorView
+                        var f = dec.systemUiVisibility
+                        f = if (light) f or android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR else f and android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+                        if (Build.VERSION.SDK_INT >= 26) {
+                            f = if (light) f or android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR else f and android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
+                        }
+                        dec.systemUiVisibility = f
+                    }
+                } catch (_: Throwable) {}
+            }
+            setBars(win)
+            setBars((view.context as? android.app.Activity)?.window)
+        }
+        val rootPos = remember { floatArrayOf(0f, 0f) }
         var snap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
         var prog by remember { mutableFloatStateOf(0f) }
         var origin by remember { mutableStateOf(Offset.Zero) }
@@ -489,6 +517,7 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
         }
         Box(
             Modifier.fillMaxSize()
+                .onGloballyPositioned { val p = it.positionInWindow(); rootPos[0] = p.x; rootPos[1] = p.y }
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         val d = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -545,9 +574,14 @@ fun SettingsDialog(mode: Int, style: Int, onMode: (Int) -> Unit, onStyle: (Int) 
                     val dx = maxOf(origin.x, w - origin.x); val dy = maxOf(origin.y, h - origin.y)
                     val maxR = kotlin.math.sqrt(dx * dx + dy * dy)
                     val rad = (maxR + feather) * prog
-                    val exact = sn.width == w.toInt() && sn.height == h.toInt()
-                    drawImage(sn, dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()),
-                        filterQuality = if (exact) androidx.compose.ui.graphics.FilterQuality.None else androidx.compose.ui.graphics.FilterQuality.Low)
+                    // الصورة تُرسم بحجمها الأصلي 1:1 من مكان الصندوق داخل النافذة، بدون أي تمطيط (التمطيط كان يسبب نزول النصوص)
+                    val px = rootPos[0].toInt().coerceAtLeast(0); val py = rootPos[1].toInt().coerceAtLeast(0)
+                    val sw = minOf(w.toInt(), sn.width - px); val sh = minOf(h.toInt(), sn.height - py)
+                    if (sw > 0 && sh > 0) drawImage(sn,
+                        srcOffset = androidx.compose.ui.unit.IntOffset(px, py),
+                        srcSize = androidx.compose.ui.unit.IntSize(sw, sh),
+                        dstSize = androidx.compose.ui.unit.IntSize(sw, sh),
+                        filterQuality = androidx.compose.ui.graphics.FilterQuality.None)
                     if (rad > 1f) {
                         val inner = ((rad - feather) / rad).coerceIn(0f, 1f)
                         drawRect(
