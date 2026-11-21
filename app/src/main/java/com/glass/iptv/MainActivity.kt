@@ -821,6 +821,60 @@ fun buzz(v: View, release: Boolean, scroll: Boolean = false) {
     } catch (_: Throwable) {}
 }
 
+// قوة الصدمة (0..1) حسب سرعة سحب الإصبعين: بطيء = صدمة خفيفة جداً، سريع جداً = صدمة قوية
+// السرعة بوحدة dp/ث: أقل من ~150 تعتبر بطيئة، وأكثر من ~1400 تعتبر أقصى قوة
+fun impactStrength(dpPerSec: Float): Float {
+    val x = ((dpPerSec - 150f) / 1250f).coerceIn(0f, 1f)
+    return 0.12f + 0.88f * x
+}
+
+// هزة الصدمة عند حد التقريب: s من 0 إلى 1.
+// ضعيفة = نقرة خفيفة، قوية = ضربة THUD كاملة + ارتدادات متتالية تتلاشى (تتزامن مع ارتداد الفيديو)
+fun impactBuzz(v: View, s: Float) {
+    if (!Hap.allowed()) return
+    val st = s.coerceIn(0f, 1f)
+    try {
+        val ctx = v.context
+        val vib: android.os.Vibrator = if (Build.VERSION.SDK_INT >= 31) {
+            ctx.getSystemService(android.os.VibratorManager::class.java).defaultVibrator
+        } else {
+            @Suppress("DEPRECATION") ctx.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+        }
+        if (!vib.hasVibrator()) { buzz(v, false); return }
+        val after = when { st < 0.3f -> 0; st < 0.6f -> 1; st < 0.85f -> 2; else -> 3 }
+        val effect: android.os.VibrationEffect =
+            if (Build.VERSION.SDK_INT >= 30 && vib.areAllPrimitivesSupported(
+                    android.os.VibrationEffect.Composition.PRIMITIVE_THUD,
+                    android.os.VibrationEffect.Composition.PRIMITIVE_CLICK)) {
+                val c = android.os.VibrationEffect.startComposition()
+                if (st < 0.3f) c.addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_CLICK, 0.35f + st)
+                else c.addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_THUD, 0.5f + 0.5f * st)
+                for (i in 1..after) {
+                    c.addPrimitive(android.os.VibrationEffect.Composition.PRIMITIVE_CLICK,
+                        (0.85f * st / (i + 0.6f)).coerceIn(0.2f, 1f), 50)
+                }
+                c.compose()
+            } else {
+                val n = after + 1
+                val t = LongArray(n * 2); val a = IntArray(n * 2)
+                for (i in 0 until n) {
+                    t[i * 2] = if (i == 0) 0L else 40L; a[i * 2] = 0
+                    t[i * 2 + 1] = (14f + 30f * st / (i + 1)).toLong()
+                    a[i * 2 + 1] = (255f * (0.25f + 0.75f * st) / (i + 1)).toInt().coerceIn(1, 255)
+                }
+                android.os.VibrationEffect.createWaveform(t, a, -1)
+            }
+        if (Build.VERSION.SDK_INT >= 33) {
+            vib.vibrate(effect, android.os.VibrationAttributes.createForUsage(android.os.VibrationAttributes.USAGE_TOUCH))
+        } else {
+            @Suppress("DEPRECATION")
+            vib.vibrate(effect, android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+        }
+    } catch (_: Throwable) { buzz(v, false) }
+}
+
 // زر حي: يصغر وهو مضغوط ويرتد، يتوهج عند اللمس، وإطاره يلمع بدوران بطيء جداً وسلس، مع هزة عند الضغط وعند الرفع
 @Composable
 fun Modifier.liveGlass(r: Dp, onClick: () -> Unit): Modifier {
@@ -1612,11 +1666,13 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
     // ارتداد خفيف مع هزات بسيطة عند الوصول لحد التقريب (الأدنى أو الأقصى)
     val limScale = remember { Animatable(1f) }
     val limShake = remember { Animatable(0f) }
-    fun limitBounce() {
-        buzz(hapticView, false)
+    // st = قوة الصدمة 0..1 (من سرعة السحب): تتحكم بعمق الانكماش وقوة الاهتزاز البصري وقوة هزة الجوال
+    fun limitBounce(st: Float = 0.5f) {
+        val k = st.coerceIn(0f, 1f)
+        impactBuzz(hapticView, k)
         scope.launch {
-            launch { limScale.snapTo(0.93f); limScale.animateTo(1f, spring(dampingRatio = 0.3f, stiffness = 520f)) }
-            launch { limShake.snapTo(14f); limShake.animateTo(0f, spring(dampingRatio = 0.14f, stiffness = 800f)) }
+            launch { limScale.snapTo(1f - (0.02f + 0.14f * k)); limScale.animateTo(1f, spring(dampingRatio = 0.3f, stiffness = 520f)) }
+            launch { limShake.snapTo(2f + 26f * k); limShake.animateTo(0f, spring(dampingRatio = 0.14f, stiffness = 800f)) }
         }
     }
 
@@ -2267,6 +2323,7 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                             vtZ.addPointerInputChange(second)
                             var over = 0f
                             var armed = true
+                            var impactV = 0f   // أعلى سرعة سحب (px/ث) لحظة الاصطدام بحد التقريب
                             while (true) {
                                 val ev = awaitPointerEvent()
                                 val ch = ev.changes.firstOrNull { it.id == second.id } ?: break
@@ -2282,15 +2339,19 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                     val np = zoomAt(zoom, Offset(panX, panY), zNew, anchor, sw, sh)
                                     zoom = zNew; panX = np.x; panY = np.y
                                     if (zRaw < 1f || zRaw > 4f) {
-                                        // وصلنا لحد التقريب وما زال المستخدم يسحب: ارتداد وهزات بسيطة
+                                        // وصلنا لحد التقريب وما زال المستخدم يسحب: ارتداد وهزات حسب سرعة السحب
+                                        val vNow = vtZ.calculateVelocity()
+                                        val spd = kotlin.math.abs(if (full && size.height > size.width) vNow.x else vNow.y)
+                                        impactV = kotlin.math.max(impactV, spd)
                                         over += kotlin.math.abs(dyPic)
-                                        if (armed && over > 28.dp.toPx()) { armed = false; limitBounce() }
-                                    } else { over = 0f; armed = true }
+                                        if (armed && over > 10.dp.toPx()) { armed = false; limitBounce(impactStrength(impactV / density)) }
+                                    } else { over = 0f; armed = true; impactV = 0f }
                                     ch.consume()
                                 }
                             }
                             // انزلاق الزوم بعد الإفلات: لو سحبت بسرعة وفلتّ، الزوم يكمل ويهدأ تدريجياً (مع بقاء نقطة الإصبع ثابتة)
                             if (dragged) {
+                                val bouncedInDrag = !armed   // الصدمة صارت أثناء السحب، لا نكررها عند الإفلات
                                 val vz = vtZ.calculateVelocity()
                                 val rotNow = full && size.height > size.width
                                 val uVel = (if (rotNow) -vz.x else vz.y) / 450f * 0.45f   // سرعة تغيّر ln(zoom) بالثانية (مخفّفة)
@@ -2306,8 +2367,9 @@ fun App(player: Player?, inPip: Boolean, openReq: Int, themeMode: Int, themeStyl
                                             val np = zoomAt(zPrev, Offset(panX, panY), zNew, anchor, sw, sh)
                                             zoom = zNew; panX = np.x; panY = np.y; zPrev = zNew
                                         }
-                                        if (r.endReason == androidx.compose.animation.core.AnimationEndReason.BoundReached &&
-                                            kotlin.math.abs(r.endState.velocity) > 0.8f) limitBounce()
+                                        if (!bouncedInDrag && r.endReason == androidx.compose.animation.core.AnimationEndReason.BoundReached &&
+                                            kotlin.math.abs(r.endState.velocity) > 0.8f)
+                                            limitBounce(impactStrength(kotlin.math.abs(r.endState.velocity) * 1000f / density))
                                         if (zoom < 1.05f) { zoom = 1f; panX = 0f; panY = 0f }
                                     }
                                     return@awaitEachGesture
